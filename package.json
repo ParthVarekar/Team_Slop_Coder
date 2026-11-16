@@ -21,6 +21,7 @@
     "test:e2e": "node apps/ui/e2e/golden-path.mjs",
     "test:e2e:team": "node apps/ui/e2e/team-view.mjs",
     "test:e2e:twodev": "node apps/ui/e2e/two-dev.mjs",
+    "test:e2e:twodaemon": "node apps/daemon/e2e/two-daemon.mjs",
     "bench": "pnpm --filter @weft/bench run bench",
     "check": "pnpm run build && pnpm run lint && pnpm run test"
   },

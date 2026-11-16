@@ -42,9 +42,9 @@ export default tseslint.config(
     },
   },
   {
-    // Self-contained Node E2E runner; the waitForFunction callback also runs in
+    // Self-contained Node E2E runners; UI waitForFunction callbacks also run in
     // a browser context, so both node and browser globals are in scope.
-    files: ['apps/ui/e2e/**/*.mjs'],
+    files: ['**/e2e/**/*.mjs'],
     languageOptions: {
       globals: {
         process: 'readonly',
