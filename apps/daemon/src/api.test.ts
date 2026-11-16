@@ -460,6 +460,73 @@ describe('repo API', () => {
       expect(res.statusCode).toBe(404);
     }
   });
+
+  it('indexes symbols and keeps them fresh across scans', async () => {
+    const repoPath = makeGitRepo();
+    const g = (args: string[]) =>
+      execFileSync('git', args, { cwd: repoPath, encoding: 'utf8', windowsHide: true });
+    writeFileSync(join(repoPath, 'sym.ts'), 'export function hello(name: string): string { return name; }\n');
+    g(['add', '-A']);
+    g(['commit', '-qm', 'sym']);
+    const create = await api.app.inject({
+      method: 'POST',
+      url: '/v1/repos',
+      headers: auth(),
+      payload: { path: repoPath },
+    });
+    const repo = create.json().repo;
+
+    const idx = await api.app.inject({
+      method: 'POST',
+      url: `/v1/repos/${repo.repo_id}/index`,
+      headers: auth(),
+      payload: {},
+    });
+    expect(idx.statusCode).toBe(200);
+    expect(idx.json()).toMatchObject({ branch: 'main', indexed: 1, source: 'worktree' });
+
+    const sym = await api.app.inject({
+      method: 'GET',
+      url: `/v1/repos/${repo.repo_id}/symbols?edges=true`,
+      headers: auth(),
+    });
+    expect(sym.statusCode).toBe(200);
+    expect(sym.json().symbols.map((s: { name: string }) => s.name)).toEqual(['hello']);
+    expect(sym.json().symbols[0].signature).toBe('hello(name: string): string');
+    expect(Array.isArray(sym.json().edges)).toBe(true);
+
+    // A dirty edit + scan must incrementally refresh the index via the watcher hook.
+    writeFileSync(
+      join(repoPath, 'sym.ts'),
+      'export function hello(name: string): string { return name; }\nexport function bye(): void {}\n',
+    );
+    const scan = await api.app.inject({
+      method: 'POST',
+      url: `/v1/repos/${repo.repo_id}/scan`,
+      headers: auth(),
+    });
+    expect(scan.statusCode).toBe(200);
+    const sym2 = await api.app.inject({
+      method: 'GET',
+      url: `/v1/repos/${repo.repo_id}/symbols`,
+      headers: auth(),
+    });
+    expect(sym2.json().symbols.map((s: { name: string }) => s.name)).toEqual(['hello', 'bye']);
+
+    const missing = await api.app.inject({
+      method: 'POST',
+      url: '/v1/repos/repo_missing/index',
+      headers: auth(),
+      payload: {},
+    });
+    expect(missing.statusCode).toBe(404);
+    const missingSym = await api.app.inject({
+      method: 'GET',
+      url: '/v1/repos/repo_missing/symbols',
+      headers: auth(),
+    });
+    expect(missingSym.statusCode).toBe(404);
+  });
 });
 
 describe('worktree API', () => {

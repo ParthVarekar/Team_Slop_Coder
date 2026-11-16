@@ -13,6 +13,7 @@ import { TaskError, UpdateTaskInputSchema } from './tasks.js';
 import { RepoError } from './repos.js';
 import { WorktreeError } from './worktrees.js';
 import { ConflictDetectorError } from './conflicts.js';
+import { IndexerError } from './indexer.js';
 import { ValidationRunError } from './validation.js';
 import { draftEvent } from './events.js';
 import type { StoredLocalEvent } from './store.js';
@@ -74,6 +75,10 @@ const DetectConflictsBody = z.object({
   tasks: z.array(z.object({ task_id: z.string().min(1), branch: z.string().min(1) })).min(1).max(200),
   base_ref: z.string().min(1).optional(),
   epoch: z.number().int().nonnegative().optional(),
+});
+const IndexRepoBody = z.object({
+  branch: z.string().min(1).max(255).optional(),
+  from_ref: z.boolean().optional(),
 });
 
 function worktreeErrorReply(reply: FastifyReply, err: WorktreeError): FastifyReply {
@@ -584,6 +589,45 @@ export function createApiServer(daemon: Daemon, options: ApiServerOptions = {}):
         return reply.code(404).send({ error: err.code, message: err.message });
       throw err;
     }
+  });
+
+  // Symbol index (M3.1): branch-scoped, incremental. Full sweep is idempotent —
+  // unchanged files are skipped by content hash; the watcher keeps it fresh.
+  app.post('/v1/repos/:id/index', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const parsed = IndexRepoBody.safeParse(req.body ?? {});
+    if (!parsed.success)
+      return reply.code(400).send({ error: 'validation', message: parsed.error.message });
+    try {
+      const result = await daemon.indexer.indexRepo(id, {
+        ...(parsed.data.branch ? { branch: parsed.data.branch } : {}),
+        ...(parsed.data.from_ref !== undefined ? { fromRef: parsed.data.from_ref } : {}),
+      });
+      return reply.send(result);
+    } catch (err) {
+      if (err instanceof IndexerError)
+        return reply.code(404).send({ error: err.code, message: err.message });
+      throw err;
+    }
+  });
+
+  app.get('/v1/repos/:id/symbols', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const repo = daemon.repos.get(id);
+    if (!repo) return reply.code(404).send({ error: 'not_found' });
+    const q = req.query as Record<string, string | undefined>;
+    const branch = q.branch ?? repo.default_branch ?? 'HEAD';
+    const symbols = daemon.store.getSymbols(id, branch, q.path);
+    const includeEdges = q.edges === 'true' || q.edges === '1';
+    return {
+      repo_id: id,
+      branch,
+      count: symbols.length,
+      symbols,
+      ...(includeEdges
+        ? { edges: daemon.store.getSymbolEdges(id, branch, q.path ? { filePath: q.path } : {}) }
+        : {}),
+    };
   });
 
   // Validation supervisor (M2.10): run configured checks in a detached worktree

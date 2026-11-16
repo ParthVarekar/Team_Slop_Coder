@@ -24,6 +24,7 @@ import { OutboxShipper } from './shipper.js';
 import { CoordinationClient } from './coordination.js';
 import { EnforcementCache } from './enforcement.js';
 import { TaskCache } from './task-cache.js';
+import { Indexer } from './indexer.js';
 
 const DAEMON_VERSION = '0.0.0';
 
@@ -47,6 +48,7 @@ export class Daemon {
   readonly pipeline: EventPipeline;
   readonly tasks: LocalTaskStore;
   readonly repos: RepoRegistry;
+  readonly indexer: Indexer;
   readonly watcher: Watcher;
   readonly worktrees: WorktreeManager;
   readonly conflicts: ConflictDetector;
@@ -95,12 +97,21 @@ export class Daemon {
       projectId: this.identity.project_id,
       binary: this.config.git.binary,
     });
+    this.indexer = new Indexer({
+      registry: this.repos,
+      store: this.store,
+      binary: this.config.git.binary,
+      logger: this.logger,
+    });
     this.watcher = new Watcher({
       registry: this.repos,
       actor: this.actor,
       binary: this.config.git.binary,
       logger: this.logger,
       emit: (draft) => this.pipeline.enqueue(draftEvent(this.source, draft)),
+      onReconcile: async (repoId, changed, deleted) => {
+        await this.indexer.invalidate(repoId, changed, deleted);
+      },
     });
     this.worktrees = new WorktreeManager(this.store.db, {
       deviceId: this.identity.device_id,

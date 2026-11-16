@@ -4,6 +4,7 @@ import { reposMigration } from './0002_repos.js';
 import { syncMigration } from './0003_sync.js';
 import { worktreesMigration } from './0004_worktrees.js';
 import { claimsMigration } from './0005_claims.js';
+import { symbolsMigration } from './0006_symbols.js';
 
 /** Daemon-local SQLite migrations, applied in lexical order. */
 export const DAEMON_MIGRATIONS: Migration[] = [
@@ -12,4 +13,5 @@ export const DAEMON_MIGRATIONS: Migration[] = [
   syncMigration,
   worktreesMigration,
   claimsMigration,
+  symbolsMigration,
 ];

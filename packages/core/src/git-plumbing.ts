@@ -354,6 +354,34 @@ export async function diffNameOnly(
   return out.split('\0').filter((p) => p.length > 0);
 }
 
+/** Tracked files in the index/working tree, optionally filtered by pathspec. NUL-delimited. */
+export async function lsFiles(
+  repo: string,
+  pathspecs: string[] = [],
+  binary?: string,
+): Promise<string[]> {
+  const args = ['ls-files', '-z'];
+  if (pathspecs.length > 0) args.push('--', ...pathspecs);
+  const out = await git(args, { cwd: repo, binary });
+  return out.split('\0').filter((p) => p.length > 0);
+}
+
+/** Every blob path at a ref (recursive). NUL-delimited so paths are never C-quoted. */
+export async function lsTree(repo: string, ref: string, binary?: string): Promise<string[]> {
+  const out = await git(['ls-tree', '-r', '--name-only', '-z', ref], { cwd: repo, binary });
+  return out.split('\0').filter((p) => p.length > 0);
+}
+
+/** UTF-8 content of a file at a ref. Throws when the path is absent at that ref. */
+export async function showFile(
+  repo: string,
+  ref: string,
+  path: string,
+  binary?: string,
+): Promise<string> {
+  return git(['show', `${ref}:${path}`], { cwd: repo, binary });
+}
+
 export interface MergeTreeResult {
   /** True when the in-memory merge produced no conflicts. */
   clean: boolean;

@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { openSqlite, migrate, DAEMON_MIGRATIONS, type SqliteDatabase } from '@weft/core';
 import { isCoordinationEvent, type EventEnvelope } from '@weft/protocol';
+import type { ExtractedEdge, ExtractedSymbol } from './symbols.js';
 
 export type StoredLocalEvent = EventEnvelope & { received_at: string; rowid?: number };
 
@@ -36,6 +37,42 @@ export interface OutboxRow {
   created_at: string;
   attempts: number;
   last_error: string | null;
+}
+
+export interface StoredSymbol {
+  symbol_id: number;
+  repo_id: string;
+  branch: string;
+  file_path: string;
+  name: string;
+  kind: string;
+  container: string;
+  signature: string;
+  exported: boolean;
+  start_line: number;
+  end_line: number;
+  start_byte: number;
+  end_byte: number;
+  content_hash: string;
+  indexed_at: string;
+}
+
+export interface StoredSymbolEdge {
+  edge_id: number;
+  repo_id: string;
+  branch: string;
+  file_path: string;
+  from_symbol: string;
+  to_name: string;
+  kind: string;
+  module_specifier: string | null;
+  line: number;
+}
+
+export interface FileIndexState {
+  content_hash: string;
+  symbol_count: number;
+  indexed_at: string;
 }
 
 const EVENT_COLUMNS = `event_id, v, device_id, project_id, repo_id, session_id, provider_session_id,
@@ -292,6 +329,170 @@ export class LocalStore {
     return this.db
       .prepare('SELECT * FROM agent_sessions WHERE device_id = ? AND provider_session_id = ?')
       .get(deviceId, providerSessionId) as SessionRecord | undefined;
+  }
+
+  // --- Symbol index (M3, branch-scoped, daemon-local) -----------------------
+
+  /**
+   * Atomically replace one file's symbols + edges and record its content hash.
+   * Branch-scoped: indexing branch B never touches branch A's rows. The hash in
+   * file_index_state drives git-diff invalidation (unchanged files are skipped).
+   */
+  replaceFileSymbols(
+    repoId: string,
+    branch: string,
+    filePath: string,
+    symbols: ExtractedSymbol[],
+    edges: ExtractedEdge[],
+    contentHash: string,
+    indexedAt = new Date().toISOString(),
+  ): void {
+    const delSym = this.db.prepare(
+      'DELETE FROM symbols WHERE repo_id = ? AND branch = ? AND file_path = ?',
+    );
+    const delEdge = this.db.prepare(
+      'DELETE FROM symbol_edges WHERE repo_id = ? AND branch = ? AND file_path = ?',
+    );
+    const insSym = this.db.prepare(
+      `INSERT INTO symbols
+         (repo_id, branch, file_path, name, kind, container, signature, exported,
+          start_line, end_line, start_byte, end_byte, content_hash, indexed_at)
+       VALUES
+         (@repo_id, @branch, @file_path, @name, @kind, @container, @signature, @exported,
+          @start_line, @end_line, @start_byte, @end_byte, @content_hash, @indexed_at)`,
+    );
+    const insEdge = this.db.prepare(
+      `INSERT INTO symbol_edges
+         (repo_id, branch, file_path, from_symbol, to_name, kind, module_specifier, line)
+       VALUES (@repo_id, @branch, @file_path, @from_symbol, @to_name, @kind, @module_specifier, @line)`,
+    );
+    const upsertState = this.db.prepare(
+      `INSERT INTO file_index_state (repo_id, branch, file_path, content_hash, symbol_count, indexed_at)
+       VALUES (@repo_id, @branch, @file_path, @content_hash, @symbol_count, @indexed_at)
+       ON CONFLICT (repo_id, branch, file_path) DO UPDATE SET
+         content_hash = excluded.content_hash,
+         symbol_count = excluded.symbol_count,
+         indexed_at = excluded.indexed_at`,
+    );
+    const tx = this.db.transaction(() => {
+      delSym.run(repoId, branch, filePath);
+      delEdge.run(repoId, branch, filePath);
+      for (const s of symbols) {
+        insSym.run({
+          repo_id: repoId,
+          branch,
+          file_path: filePath,
+          name: s.name,
+          kind: s.kind,
+          container: s.container,
+          signature: s.signature,
+          exported: s.exported ? 1 : 0,
+          start_line: s.start_line,
+          end_line: s.end_line,
+          start_byte: s.start_byte,
+          end_byte: s.end_byte,
+          content_hash: s.content_hash,
+          indexed_at: indexedAt,
+        });
+      }
+      for (const e of edges) {
+        insEdge.run({
+          repo_id: repoId,
+          branch,
+          file_path: filePath,
+          from_symbol: e.from_symbol,
+          to_name: e.to_name,
+          kind: e.kind,
+          module_specifier: e.module_specifier,
+          line: e.line,
+        });
+      }
+      upsertState.run({
+        repo_id: repoId,
+        branch,
+        file_path: filePath,
+        content_hash: contentHash,
+        symbol_count: symbols.length,
+        indexed_at: indexedAt,
+      });
+    });
+    tx();
+  }
+
+  deleteFileSymbols(repoId: string, branch: string, filePath: string): void {
+    const tx = this.db.transaction(() => {
+      this.db
+        .prepare('DELETE FROM symbols WHERE repo_id = ? AND branch = ? AND file_path = ?')
+        .run(repoId, branch, filePath);
+      this.db
+        .prepare('DELETE FROM symbol_edges WHERE repo_id = ? AND branch = ? AND file_path = ?')
+        .run(repoId, branch, filePath);
+      this.db
+        .prepare('DELETE FROM file_index_state WHERE repo_id = ? AND branch = ? AND file_path = ?')
+        .run(repoId, branch, filePath);
+    });
+    tx();
+  }
+
+  getFileIndexState(repoId: string, branch: string, filePath: string): FileIndexState | undefined {
+    return this.db
+      .prepare(
+        'SELECT content_hash, symbol_count, indexed_at FROM file_index_state WHERE repo_id = ? AND branch = ? AND file_path = ?',
+      )
+      .get(repoId, branch, filePath) as FileIndexState | undefined;
+  }
+
+  listIndexedFiles(repoId: string, branch: string): string[] {
+    const rows = this.db
+      .prepare('SELECT file_path FROM file_index_state WHERE repo_id = ? AND branch = ? ORDER BY file_path')
+      .all(repoId, branch) as { file_path: string }[];
+    return rows.map((r) => r.file_path);
+  }
+
+  getSymbols(repoId: string, branch: string, filePath?: string): StoredSymbol[] {
+    const rows = filePath
+      ? (this.db
+          .prepare(
+            'SELECT * FROM symbols WHERE repo_id = ? AND branch = ? AND file_path = ? ORDER BY start_line, name',
+          )
+          .all(repoId, branch, filePath) as (Omit<StoredSymbol, 'exported'> & { exported: number })[])
+      : (this.db
+          .prepare(
+            'SELECT * FROM symbols WHERE repo_id = ? AND branch = ? ORDER BY file_path, start_line, name',
+          )
+          .all(repoId, branch) as (Omit<StoredSymbol, 'exported'> & { exported: number })[]);
+    return rows.map((r) => ({ ...r, exported: r.exported !== 0 }));
+  }
+
+  getSymbolEdges(
+    repoId: string,
+    branch: string,
+    opts: { filePath?: string; toName?: string; kind?: string } = {},
+  ): StoredSymbolEdge[] {
+    const clauses = ['repo_id = @repo', 'branch = @branch'];
+    const params: Record<string, unknown> = { repo: repoId, branch };
+    if (opts.filePath) {
+      clauses.push('file_path = @file');
+      params.file = opts.filePath;
+    }
+    if (opts.toName) {
+      clauses.push('to_name = @to');
+      params.to = opts.toName;
+    }
+    if (opts.kind) {
+      clauses.push('kind = @kind');
+      params.kind = opts.kind;
+    }
+    return this.db
+      .prepare(`SELECT * FROM symbol_edges WHERE ${clauses.join(' AND ')} ORDER BY file_path, line`)
+      .all(params) as StoredSymbolEdge[];
+  }
+
+  countSymbols(repoId: string, branch: string): number {
+    const row = this.db
+      .prepare('SELECT COUNT(*) AS c FROM symbols WHERE repo_id = ? AND branch = ?')
+      .get(repoId, branch) as { c: number };
+    return row.c;
   }
 
   close(): void {

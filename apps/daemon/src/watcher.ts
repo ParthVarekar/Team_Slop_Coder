@@ -105,6 +105,8 @@ export interface WatcherDeps {
   autoWip?: boolean;
   /** Backend override (tests inject a fake). */
   backend?: WatchBackend | undefined;
+  /** Fired after each reconcile with the dirty change set (drives index invalidation). */
+  onReconcile?: ((repoId: string, changed: string[], deleted: string[]) => void | Promise<void>) | undefined;
 }
 
 export interface ReconcileResult {
@@ -152,6 +154,9 @@ export class Watcher {
   private readonly wipIntervalMs: number;
   private readonly autoWip: boolean;
   private readonly injectedBackend: WatchBackend | undefined;
+  private readonly onReconcile:
+    | ((repoId: string, changed: string[], deleted: string[]) => void | Promise<void>)
+    | undefined;
 
   private backend: WatchBackend | null = null;
   private readonly states = new Map<string, RepoWatchState>();
@@ -170,6 +175,7 @@ export class Watcher {
     this.wipIntervalMs = deps.wipIntervalMs ?? 60_000;
     this.autoWip = deps.autoWip ?? true;
     this.injectedBackend = deps.backend;
+    this.onReconcile = deps.onReconcile;
   }
 
   get backendName(): 'parcel' | 'poll' | null {
@@ -304,6 +310,8 @@ export class Watcher {
     }
     const previous = new Map(this.registry.getFileState(repo.repo_id).map((s) => [s.path, s]));
     let emitted = 0;
+    const changedPaths: string[] = [];
+    const deletedPaths: string[] = [];
     for (const f of files) {
       const prev = previous.get(f.path);
       const newHash = hashes.get(f.path) ?? null;
@@ -327,9 +335,19 @@ export class Watcher {
         },
       });
       emitted++;
+      if (f.changeKind === 'delete') deletedPaths.push(f.path);
+      else changedPaths.push(f.path);
     }
     this.registry.replaceFileState(repo.repo_id, RepoRegistry.toFileState(files, hashes));
     this.registry.recordScan(repo.repo_id, await headOid(repo.root_path, this.binary));
+
+    if (this.onReconcile && (changedPaths.length > 0 || deletedPaths.length > 0)) {
+      try {
+        await this.onReconcile(repo.repo_id, changedPaths, deletedPaths);
+      } catch (err) {
+        this.logger?.warn({ err, repo: repo.repo_id }, 'index invalidation hook failed');
+      }
+    }
 
     let wip: AutoWipResult | null = null;
     const state = this.states.get(repo.repo_id);
