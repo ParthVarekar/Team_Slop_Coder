@@ -138,7 +138,7 @@ export class EnforcementCache {
           path_glob: pathGlob,
           mode: payload.mode === 'hard' ? 'hard' : 'soft',
           holder_task_id: str(payload.holder_task_id) ?? e.task_id ?? null,
-          holder_device_id: e.device_id,
+          holder_device_id: str(payload.holder_device_id) ?? e.device_id,
           expires_at: str(payload.expires_at),
           grace_until: str(payload.grace_until),
           state: 'active',
@@ -209,8 +209,9 @@ export class EnforcementCache {
 
   /**
    * Check whether `path` may be edited under `taskId`. Another task's active
-   * hard reservation blocks; a soft reservation warns when fresh and passes
-   * when stale (fail open). Own reservations always pass.
+   * hard reservation blocks through its expiry grace (grace_until ?? expires_at)
+   * so a lease is never stolen mid-edit; a soft reservation warns while fresh
+   * (expires_at) and passes when stale (fail open). Own reservations always pass.
    */
   checkReservation(path: string, taskId?: string, now: number = Date.now()): ReservationCheck {
     let hardBlock = false;
@@ -219,12 +220,15 @@ export class EnforcementCache {
       if (r.state !== 'active') continue;
       if (taskId && r.holder_task_id === taskId) continue;
       if (!globMatch(r.path_glob, path)) continue;
-      const expired = r.expires_at != null && Date.parse(r.expires_at) <= now;
       if (r.mode === 'hard') {
+        // Hard locks hold through the grace window; only past grace are they reclaimable.
+        const hardEnd = r.grace_until ?? r.expires_at;
+        const lapsed = hardEnd != null && Date.parse(hardEnd) <= now;
         // Fail closed when stale: do not trust an expiry we cannot confirm.
-        if (expired && !this.stale) continue;
+        if (lapsed && !this.stale) continue;
         hardBlock = true;
       } else {
+        const expired = r.expires_at != null && Date.parse(r.expires_at) <= now;
         if (expired) continue;
         softWarn = true;
       }

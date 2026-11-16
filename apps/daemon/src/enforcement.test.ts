@@ -115,6 +115,90 @@ describe('EnforcementCache reservations', () => {
   });
 });
 
+describe('EnforcementCache lease grace', () => {
+  it('hard lock blocks through the expiry grace (no mid-edit steal), reclaims past grace', () => {
+    const cache = new EnforcementCache();
+    cache.setStale(false);
+    const now = Date.now();
+    cache.applyEvent(
+      coord(1, 'reservation.acquired', {
+        path_glob: 'src/**',
+        mode: 'hard',
+        holder_task_id: 'task_owner',
+        expires_at: new Date(now - 1_000).toISOString(), // already expired
+        grace_until: new Date(now + 60_000).toISOString(), // but still in grace
+      }),
+    );
+    // Inside grace: expires_at has passed yet the lock must STILL block rivals.
+    expect(cache.checkReservation('src/a.ts', 'task_other', now)).toBe('blocked');
+    expect(cache.checkReservation('src/a.ts', 'task_owner', now)).toBe('pass');
+    // Past grace: reclaimable.
+    expect(cache.checkReservation('src/a.ts', 'task_other', now + 120_000)).toBe('pass');
+  });
+
+  it('hard lock with no grace reclaims at expires_at when fresh', () => {
+    const cache = new EnforcementCache();
+    cache.setStale(false);
+    const now = Date.now();
+    cache.applyEvent(
+      coord(1, 'reservation.acquired', {
+        path_glob: 'src/**',
+        mode: 'hard',
+        holder_task_id: 'task_owner',
+        expires_at: new Date(now - 1_000).toISOString(),
+      }),
+    );
+    expect(cache.checkReservation('src/a.ts', 'task_other', now)).toBe('pass');
+  });
+
+  it('soft reservation uses expires_at, not grace_until (advisory, no grace extension)', () => {
+    const cache = new EnforcementCache();
+    cache.setStale(false);
+    const now = Date.now();
+    cache.applyEvent(
+      coord(1, 'reservation.acquired', {
+        path_glob: 'src/**',
+        mode: 'soft',
+        holder_task_id: 'task_owner',
+        expires_at: new Date(now - 1_000).toISOString(),
+        grace_until: new Date(now + 60_000).toISOString(),
+      }),
+    );
+    expect(cache.checkReservation('src/a.ts', 'task_other', now)).toBe('pass');
+  });
+
+  it('stale hard lock fails closed past grace but still blocks inside grace', () => {
+    const cache = new EnforcementCache();
+    cache.setStale(true);
+    const now = Date.now();
+    cache.applyEvent(
+      coord(1, 'reservation.acquired', {
+        path_glob: 'src/**',
+        mode: 'hard',
+        holder_task_id: 'task_owner',
+        expires_at: new Date(now - 1_000).toISOString(),
+        grace_until: new Date(now + 60_000).toISOString(),
+      }),
+    );
+    expect(cache.checkReservation('src/a.ts', 'task_other', now)).toBe('blocked');
+    // Past grace + stale: cannot confirm reclaim, so fail closed.
+    expect(cache.checkReservation('src/a.ts', 'task_other', now + 120_000)).toBe('blocked');
+  });
+
+  it('projects holder_device_id from the payload, not the emitting server device', () => {
+    const cache = new EnforcementCache();
+    cache.applyEvent(
+      coord(1, 'reservation.acquired', {
+        path_glob: 'src/**',
+        mode: 'hard',
+        holder_task_id: 'task_owner',
+        holder_device_id: 'device_holder',
+      }),
+    );
+    expect(cache.snapshot().reservations[0]?.holder_device_id).toBe('device_holder');
+  });
+});
+
 describe('EnforcementCache claims and conflicts', () => {
   it('projects task claims and releases', () => {
     const cache = new EnforcementCache();

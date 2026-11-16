@@ -285,6 +285,7 @@ describe('adapter contract guarantees', () => {
       }
     }
     expect(CAPABILITY_MANIFEST.fidelity).toBe('high');
-    expect(CAPABILITY_MANIFEST.enforcement).toMatchObject({ preToolUse: true, mode: 'sync' });
+    // Fail-open guardrail: participates in PreToolUse but is NOT a hard boundary.
+    expect(CAPABILITY_MANIFEST.enforcement).toMatchObject({ preToolUse: true, mode: 'sync', hardBlock: false });
   });
 });

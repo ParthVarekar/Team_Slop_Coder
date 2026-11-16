@@ -13,7 +13,7 @@ export interface CapabilityManifest {
   version: string;
   fidelity: Fidelity;
   transport: readonly ('http' | 'command' | 'sse')[];
-  enforcement: { preToolUse: boolean; mode: 'sync' | 'async' | 'none' };
+  enforcement: { preToolUse: boolean; mode: 'sync' | 'async' | 'none'; hardBlock: boolean };
   emittedTypes: readonly string[];
 }
 
@@ -23,7 +23,8 @@ export interface CapabilityManifest {
  * tool_use_id, tool_response. PreToolUse can deny synchronously, but Codex treats
  * hooks as a fail-open guardrail (an error/timeout/malformed response lets the
  * tool run), not a hard enforcement boundary — hence preToolUse:true, mode:sync
- * declares participation, not a guarantee.
+ * declares participation, not a guarantee, and hardBlock:false forces the daemon
+ * to auto-downgrade hard reservations to soft warnings for this adapter.
  */
 export const CAPABILITY_MANIFEST: CapabilityManifest = {
   provider: PROVIDER,
@@ -31,7 +32,7 @@ export const CAPABILITY_MANIFEST: CapabilityManifest = {
   version: ADAPTER_VERSION,
   fidelity: 'high',
   transport: ['http', 'command'],
-  enforcement: { preToolUse: true, mode: 'sync' },
+  enforcement: { preToolUse: true, mode: 'sync', hardBlock: false },
   emittedTypes: [
     'session.started',
     'session.status',
@@ -57,6 +58,6 @@ export const NOTIFY_MANIFEST: CapabilityManifest = {
   version: ADAPTER_VERSION,
   fidelity: 'low',
   transport: ['command', 'http'],
-  enforcement: { preToolUse: false, mode: 'none' },
+  enforcement: { preToolUse: false, mode: 'none', hardBlock: false },
   emittedTypes: ['session.status'],
 };

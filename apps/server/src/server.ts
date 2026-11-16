@@ -37,6 +37,13 @@ import {
   ConflictError,
   DetectConflictSchema,
 } from './conflicts-service.js';
+import {
+  ReservationService,
+  ReservationError,
+  AcquireReservationSchema,
+  RenewReservationSchema,
+  ReleaseReservationSchema,
+} from './reservations-service.js';
 import { ValidationService } from './validation-service.js';
 import {
   NotificationService,
@@ -123,6 +130,17 @@ const ConflictDecisionBody = z.object({
   projectId: z.string().min(1).optional(),
   note: z.string().max(2000).optional(),
 });
+const AcquireReservationBody = AcquireReservationSchema.extend({ projectId: z.string().min(1).optional() });
+const RenewReservationBody = RenewReservationSchema.extend({ projectId: z.string().min(1).optional() });
+const ReleaseReservationBody = ReleaseReservationSchema.extend({ projectId: z.string().min(1).optional() });
+const ReservationsQuery = z.object({
+  projectId: z.string().min(1).optional(),
+  repoId: z.string().min(1).optional(),
+  state: z.enum(['active', 'released']).optional(),
+  taskId: z.string().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(1000).default(200),
+});
+const ReservationSweepBody = z.object({ projectId: z.string().min(1).optional() });
 const ClaimCompletionBody = z.object({
   projectId: z.string().min(1).optional(),
   claim_text: z.string().min(1).max(8000),
@@ -197,6 +215,7 @@ export async function createServer(
   const auth = new AuthService(db.pool, options.adminSecret, logger);
   const serverDeviceId = makeId('device');
   const conflicts = new ConflictService(db.pool, serverDeviceId, logger);
+  const reservations = new ReservationService(db.pool, serverDeviceId, logger);
   const validation = new ValidationService(db.pool, logger);
   const notifications = new NotificationService(db.pool, logger);
   const ingest = new IngestService(db.pool, logger, conflicts, validation, notifications);
@@ -219,6 +238,17 @@ export async function createServer(
     }
     if (err instanceof ConflictError) {
       const status = err.code === 'not_found' ? 404 : err.code === 'invalid_transition' ? 422 : 400;
+      return reply.code(status).send({ error: err.code, message: err.message });
+    }
+    if (err instanceof ReservationError) {
+      const status =
+        err.code === 'not_found'
+          ? 404
+          : err.code === 'forbidden'
+            ? 403
+            : err.code === 'invalid_transition'
+              ? 422
+              : 400;
       return reply.code(status).send({ error: err.code, message: err.message });
     }
     if (err instanceof NotificationError) {
@@ -637,6 +667,80 @@ export async function createServer(
     const card = await conflicts.dismiss(id, g.projectId, originOf(g.ctx), body.data.note);
     hub.notify(g.projectId);
     return reply.send({ conflict: card });
+  });
+
+  // --- Reservations (server-authoritative leases; CAS acquire + holder renew) ---
+  app.post('/v1/reservations', async (req, reply) => {
+    const body = AcquireReservationBody.safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: 'validation', message: body.error.message });
+    const g = await guard(req, reply, 'mutate', body.data.projectId);
+    if (!g) return;
+    if (!g.projectId) return reply.code(400).send({ error: 'validation', message: 'projectId is required' });
+    const result = await reservations.acquire(g.projectId, body.data, originOf(g.ctx));
+    hub.notify(g.projectId);
+    const status = result.status === 'denied' ? 409 : result.status === 'acquired' ? 201 : 200;
+    return reply.code(status).send(result);
+  });
+
+  app.get('/v1/reservations', async (req, reply) => {
+    const q = ReservationsQuery.safeParse(req.query);
+    if (!q.success) return reply.code(400).send({ error: 'validation', message: q.error.message });
+    const g = await guard(req, reply, 'read', q.data.projectId);
+    if (!g) return;
+    if (!g.projectId) return reply.code(400).send({ error: 'validation', message: 'projectId is required' });
+    const list = await reservations.list(g.projectId, {
+      ...(q.data.repoId ? { repoId: q.data.repoId } : {}),
+      ...(q.data.state ? { state: q.data.state } : {}),
+      ...(q.data.taskId ? { taskId: q.data.taskId } : {}),
+      limit: q.data.limit,
+    });
+    return reply.send({ reservations: list });
+  });
+
+  app.post('/v1/reservations/sweep', async (req, reply) => {
+    const body = ReservationSweepBody.safeParse(req.body ?? {});
+    if (!body.success) return reply.code(400).send({ error: 'validation', message: body.error.message });
+    const g = await guard(req, reply, 'mutate', body.data.projectId);
+    if (!g) return;
+    if (!g.projectId) return reply.code(400).send({ error: 'validation', message: 'projectId is required' });
+    const released = await reservations.sweepExpired(g.projectId);
+    if (released > 0) hub.notify(g.projectId);
+    return reply.send({ released });
+  });
+
+  app.get('/v1/reservations/:id', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const q = req.query as { projectId?: string };
+    const g = await guard(req, reply, 'read', q.projectId);
+    if (!g) return;
+    if (!g.projectId) return reply.code(400).send({ error: 'validation', message: 'projectId is required' });
+    const reservation = await reservations.get(g.projectId, id);
+    if (!reservation) return reply.code(404).send({ error: 'not_found', message: `reservation ${id} not found` });
+    return reply.send({ reservation });
+  });
+
+  app.post('/v1/reservations/:id/renew', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = RenewReservationBody.safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: 'validation', message: body.error.message });
+    const g = await guard(req, reply, 'mutate', body.data.projectId);
+    if (!g) return;
+    if (!g.projectId) return reply.code(400).send({ error: 'validation', message: 'projectId is required' });
+    const reservation = await reservations.renew(g.projectId, id, body.data.task_id, originOf(g.ctx), body.data.ttl_ms);
+    hub.notify(g.projectId);
+    return reply.send({ reservation });
+  });
+
+  app.post('/v1/reservations/:id/release', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = ReleaseReservationBody.safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: 'validation', message: body.error.message });
+    const g = await guard(req, reply, 'mutate', body.data.projectId);
+    if (!g) return;
+    if (!g.projectId) return reply.code(400).send({ error: 'validation', message: 'projectId is required' });
+    const reservation = await reservations.release(g.projectId, id, body.data.task_id, originOf(g.ctx), body.data.reason);
+    hub.notify(g.projectId);
+    return reply.send({ reservation });
   });
 
   // --- Validation evidence (project-scoped reads; the server never runs checks) ---

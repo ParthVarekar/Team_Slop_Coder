@@ -116,6 +116,29 @@ function mapEndReason(reason: string | undefined): 'completed' | 'interrupted' {
 const FILE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 
 /**
+ * Claude Code PreToolUse hook JSON response. `permissionDecision: 'deny'`
+ * synchronously blocks the tool call — this adapter is a real hard enforcement
+ * boundary (manifest hardBlock:true), unlike fail-open adapters.
+ */
+export interface PreToolUseDecision {
+  hookSpecificOutput: {
+    hookEventName: 'PreToolUse';
+    permissionDecision: 'deny' | 'allow' | 'ask';
+    permissionDecisionReason?: string;
+  };
+}
+
+export function denyPreToolUse(reason: string): PreToolUseDecision {
+  return {
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'deny',
+      permissionDecisionReason: reason,
+    },
+  };
+}
+
+/**
  * Translate a Claude Code hook payload into protocol-v1 event drafts. Unknown
  * hooks yield no events (never fabricate activity); malformed input throws.
  * Secret redaction happens downstream in the pipeline, not here.

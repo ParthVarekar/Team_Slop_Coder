@@ -84,6 +84,6 @@ describe('Codex legacy notify translation', () => {
       expect(declared.has(event.type)).toBe(true);
     }
     expect(NOTIFY_MANIFEST.fidelity).toBe('low');
-    expect(NOTIFY_MANIFEST.enforcement).toMatchObject({ preToolUse: false, mode: 'none' });
+    expect(NOTIFY_MANIFEST.enforcement).toMatchObject({ preToolUse: false, mode: 'none', hardBlock: false });
   });
 });

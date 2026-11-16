@@ -32,6 +32,7 @@ export const SymbolKindSchema = z.enum([
 ]);
 export const SymbolChangeKindSchema = z.enum(['added', 'removed', 'signature', 'body']);
 export const ReservationModeSchema = z.enum(['soft', 'hard']);
+export type ReservationMode = z.infer<typeof ReservationModeSchema>;
 export const ConflictKindSchema = z.enum([
   'textual',
   'file_overlap',
@@ -228,9 +229,14 @@ const TaskHandedOffPayload = obj({
 const ReservationPayload = obj({
   path_glob: z.string().min(1),
   mode: ReservationModeSchema,
+  reservation_id: z.string().optional(),
   expires_at: z.string().datetime({ offset: true }).optional(),
   grace_until: z.string().datetime({ offset: true }).optional(),
+  renewed_at: z.string().datetime({ offset: true }).optional(),
   holder_task_id: z.string().optional(),
+  holder_device_id: z.string().optional(),
+  lease_epoch: nonneg.optional(),
+  reason: z.string().optional(),
 });
 const ConflictPayload = obj({
   canonical_key: z.string().min(1),

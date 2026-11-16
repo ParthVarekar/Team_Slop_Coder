@@ -13,7 +13,7 @@ export interface CapabilityManifest {
   version: string;
   fidelity: Fidelity;
   transport: readonly ('http' | 'command' | 'sse')[];
-  enforcement: { preToolUse: boolean; mode: 'sync' | 'async' | 'none' };
+  enforcement: { preToolUse: boolean; mode: 'sync' | 'async' | 'none'; hardBlock: boolean };
   emittedTypes: readonly string[];
 }
 
@@ -23,7 +23,7 @@ export const CAPABILITY_MANIFEST: CapabilityManifest = {
   version: ADAPTER_VERSION,
   fidelity: 'high',
   transport: ['http', 'command'],
-  enforcement: { preToolUse: true, mode: 'sync' },
+  enforcement: { preToolUse: true, mode: 'sync', hardBlock: true },
   emittedTypes: [
     'session.started',
     'session.status',

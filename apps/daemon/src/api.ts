@@ -2,11 +2,12 @@ import { timingSafeEqual } from 'node:crypto';
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { PROTOCOL_VERSION, TaskStateSchema, type AgentInfo, type Privacy } from '@weft/protocol';
-import { translateHook, AdapterError } from '@weft/adapter-claude-code';
+import { translateHook, AdapterError, denyPreToolUse, CAPABILITY_MANIFEST as CLAUDE_MANIFEST, type CapabilityManifest } from '@weft/adapter-claude-code';
 import {
   translateHook as translateCodexHook,
   translateNotify as translateCodexNotify,
   AdapterError as CodexAdapterError,
+  CAPABILITY_MANIFEST as CODEX_MANIFEST,
 } from '@weft/adapter-codex';
 import type { Daemon } from './daemon.js';
 import { TaskError, UpdateTaskInputSchema } from './tasks.js';
@@ -121,11 +122,7 @@ interface TranslatedEvent {
 }
 
 /** Resolve sessions, stamp adapter drafts into protocol-v1 envelopes, ingest. */
-function ingestAdapterEvents(
-  daemon: Daemon,
-  events: readonly TranslatedEvent[],
-  reply: FastifyReply,
-): FastifyReply {
+function ingestDrafts(daemon: Daemon, events: readonly TranslatedEvent[]): { accepted: number; count: number } {
   let accepted = 0;
   for (const event of events) {
     const sessionId = daemon.resolveSession(event.providerSessionId);
@@ -139,7 +136,65 @@ function ingestAdapterEvents(
     });
     if (daemon.ingest(envelope).accepted) accepted++;
   }
-  return reply.code(202).send({ accepted, count: events.length });
+  return { accepted, count: events.length };
+}
+
+function ingestAdapterEvents(
+  daemon: Daemon,
+  events: readonly TranslatedEvent[],
+  reply: FastifyReply,
+): FastifyReply {
+  return reply.code(202).send(ingestDrafts(daemon, events));
+}
+
+const FILE_EDIT_PATH_KEYS = ['file_path', 'notebook_path'];
+
+/** The target path of a file-edit tool.pre, or null for non-file tools (e.g. Bash). */
+function preToolUsePath(event: TranslatedEvent): string | null {
+  const summary = event.payload.tool_input_summary;
+  if (!summary || typeof summary !== 'object') return null;
+  const rec = summary as Record<string, unknown>;
+  for (const key of FILE_EDIT_PATH_KEYS) {
+    const value = rec[key];
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return null;
+}
+
+/**
+ * PreToolUse hard-lock enforcement. On a file-edit tool.pre, consult the team
+ * enforcement projection: a 'blocked' hard reservation denies the tool ONLY when
+ * the adapter manifest declares hardBlock (Claude Code). Fail-open adapters
+ * (Codex) auto-downgrade the hard block to a labeled soft warning and never deny.
+ * Solo mode (no enforcement cache) and non-file tools pass through unchanged. The
+ * attempt is always ingested for observability, annotated with reservation_check.
+ */
+function ingestWithEnforcement(
+  daemon: Daemon,
+  events: readonly TranslatedEvent[],
+  manifest: CapabilityManifest,
+  reply: FastifyReply,
+): FastifyReply {
+  const pre = events.find((e) => e.type === 'tool.pre');
+  const path = pre ? preToolUsePath(pre) : null;
+  if (!pre || !path || !daemon.enforcement) return ingestAdapterEvents(daemon, events, reply);
+
+  const sessionId = daemon.resolveSession(pre.providerSessionId);
+  const taskId = daemon.store.getSession(sessionId)?.task_id ?? undefined;
+  let check = daemon.enforcement.checkReservation(path, taskId);
+  if (check === 'blocked' && !manifest.enforcement.hardBlock) {
+    // Fail-open adapter: downgrade the hard block to a soft warning, labeled.
+    check = 'warn';
+    pre.payload.reservation_downgraded = true;
+  }
+  pre.payload.reservation_check = check;
+  if (check === 'blocked' && manifest.enforcement.hardBlock) {
+    ingestDrafts(daemon, events); // record the blocked attempt before denying
+    return reply
+      .code(200)
+      .send(denyPreToolUse(`File '${path}' is hard-reserved by another task; edit blocked by Weft team coordination.`));
+  }
+  return ingestAdapterEvents(daemon, events, reply);
 }
 
 export interface ApiServer {
@@ -219,7 +274,7 @@ export function createApiServer(daemon: Daemon, options: ApiServerOptions = {}):
         return reply.code(422).send({ error: err.code, message: err.message });
       throw err;
     }
-    return ingestAdapterEvents(daemon, events, reply);
+    return ingestWithEnforcement(daemon, events, CLAUDE_MANIFEST, reply);
   });
 
   // Codex Hooks framework (hooks.json / [hooks] in config.toml) → protocol-v1.
@@ -232,7 +287,7 @@ export function createApiServer(daemon: Daemon, options: ApiServerOptions = {}):
         return reply.code(422).send({ error: err.code, message: err.message });
       throw err;
     }
-    return ingestAdapterEvents(daemon, events, reply);
+    return ingestWithEnforcement(daemon, events, CODEX_MANIFEST, reply);
   });
 
   // Codex legacy notify program hook (agent-turn-complete) → low-fidelity events.

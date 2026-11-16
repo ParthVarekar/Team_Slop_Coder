@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { WeftConfigSchema } from '@weft/core';
-import { makeId } from '@weft/protocol';
+import { makeId, ulid, PROTOCOL_VERSION, type StoredEvent } from '@weft/protocol';
 import { Daemon } from './daemon.js';
 import { createApiServer, type ApiServer } from './api.js';
 import { draftEvent } from './events.js';
@@ -817,5 +817,178 @@ describe('SSE stream', () => {
     }
     expect(resumeText).not.toContain('id: 1\n');
     expect(resumeText).toContain(`id: ${max}`);
+  });
+});
+
+describe('PreToolUse hard-lock enforcement', () => {
+  let teamDir: string;
+  let teamDaemon: Daemon;
+  let teamApi: ApiServer;
+  let teamSecret: string;
+  let rivalSession: string;
+  let codexSession: string;
+
+  const teamAuth = () => ({ authorization: `Bearer ${teamSecret}` });
+
+  function reservationEvent(seq: number, payload: Record<string, unknown>): StoredEvent {
+    return {
+      v: PROTOCOL_VERSION,
+      event_id: ulid(),
+      device_id: 'device_server',
+      project_id: teamDaemon.identity.project_id,
+      ts: new Date().toISOString(),
+      type: 'reservation.acquired',
+      actor: { user_id: teamDaemon.identity.user_id, agent: null },
+      privacy: 'metadata',
+      payload,
+      global_seq: seq,
+      received_at: new Date().toISOString(),
+    };
+  }
+
+  function seedSession(providerSessionId: string, taskId: string | null): string {
+    const sessionId = makeId('session');
+    teamDaemon.store.upsertSession({
+      session_id: sessionId,
+      device_id: teamDaemon.identity.device_id,
+      provider_id: 'claude-code',
+      provider_session_id: providerSessionId,
+      task_id: taskId,
+      developer_id: null,
+      cwd: null,
+      status: 'running',
+      started_at: new Date().toISOString(),
+      ended_at: null,
+      model: null,
+      prompt_summary: null,
+      fidelity: 'high',
+    });
+    return sessionId;
+  }
+
+  function preToolUseHook(providerSessionId: string, toolName: string, input: Record<string, unknown>) {
+    return {
+      session_id: providerSessionId,
+      hook_event_name: 'PreToolUse',
+      tool_name: toolName,
+      tool_input: input,
+      cwd: '/repo',
+    };
+  }
+
+  function toolPrePayload(sessionId: string): Record<string, unknown> | undefined {
+    const pre = teamDaemon.store.getEvents({ sessionId }).find((e) => e.type === 'tool.pre');
+    return pre?.payload as Record<string, unknown> | undefined;
+  }
+
+  beforeEach(() => {
+    teamDir = mkdtempSync(join(tmpdir(), 'weft-api-team-'));
+    const config = WeftConfigSchema.parse({
+      dataDir: teamDir,
+      logLevel: 'fatal',
+      mode: 'team',
+      server: { url: 'http://127.0.0.1:7420', token: 'test-token' },
+    });
+    // Constructed but never started(): enforcement is built in the constructor and
+    // driven directly here, so the test stays offline (no shipper/coordination timers).
+    teamDaemon = new Daemon({ config });
+    teamApi = createApiServer(teamDaemon);
+    teamSecret = teamDaemon.identity.hook_secret;
+    const enforcement = teamDaemon.enforcement;
+    if (!enforcement) throw new Error('expected team-mode enforcement cache');
+    enforcement.setStale(false);
+    enforcement.applyEvent(
+      reservationEvent(1, {
+        path_glob: 'src/**',
+        mode: 'hard',
+        holder_task_id: 'task_holder',
+        holder_device_id: 'device_other',
+        expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+        grace_until: new Date(Date.now() + 3_630_000).toISOString(),
+      }),
+    );
+    rivalSession = seedSession('sess_rival', 'task_rival');
+    seedSession('sess_holder', 'task_holder');
+    codexSession = seedSession('sess_codex', 'task_rival');
+  });
+
+  afterEach(async () => {
+    await teamApi.close();
+    // A durable flush wakes the shipper (notify→drain); stop it and await any
+    // inflight drain BEFORE closing the store, or its finally hits a closed DB.
+    await teamDaemon.shipper?.stop();
+    teamDaemon.pipeline.stop();
+    teamDaemon.store.close();
+    rmSync(teamDir, { recursive: true, force: true });
+  });
+
+  it('denies a rival file edit on Claude Code (hardBlock) and records the blocked attempt', async () => {
+    const res = await teamApi.app.inject({
+      method: 'POST',
+      url: '/v1/hooks/claude',
+      headers: teamAuth(),
+      payload: preToolUseHook('sess_rival', 'Edit', { file_path: 'src/a.ts' }),
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.hookSpecificOutput.hookEventName).toBe('PreToolUse');
+    expect(body.hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(body.hookSpecificOutput.permissionDecisionReason).toContain('src/a.ts');
+    teamDaemon.pipeline.flush();
+    expect(toolPrePayload(rivalSession)?.reservation_check).toBe('blocked');
+  });
+
+  it('allows the holder task to edit its own reserved file', async () => {
+    const res = await teamApi.app.inject({
+      method: 'POST',
+      url: '/v1/hooks/claude',
+      headers: teamAuth(),
+      payload: preToolUseHook('sess_holder', 'Edit', { file_path: 'src/a.ts' }),
+    });
+    expect(res.statusCode).toBe(202);
+    expect(res.json().accepted).toBe(1);
+  });
+
+  it('auto-downgrades the hard block to a labeled warn on Codex (fail-open, never denies)', async () => {
+    const res = await teamApi.app.inject({
+      method: 'POST',
+      url: '/v1/hooks/codex',
+      headers: teamAuth(),
+      payload: preToolUseHook('sess_codex', 'Edit', { file_path: 'src/a.ts' }),
+    });
+    expect(res.statusCode).toBe(202);
+    expect(res.json().hookSpecificOutput).toBeUndefined();
+    teamDaemon.pipeline.flush();
+    const payload = toolPrePayload(codexSession);
+    expect(payload?.reservation_check).toBe('warn');
+    expect(payload?.reservation_downgraded).toBe(true);
+  });
+
+  it('does not enforce non-file tools or unreserved paths', async () => {
+    const bash = await teamApi.app.inject({
+      method: 'POST',
+      url: '/v1/hooks/claude',
+      headers: teamAuth(),
+      payload: preToolUseHook('sess_rival', 'Bash', { command: 'ls' }),
+    });
+    expect(bash.statusCode).toBe(202);
+    const docs = await teamApi.app.inject({
+      method: 'POST',
+      url: '/v1/hooks/claude',
+      headers: teamAuth(),
+      payload: preToolUseHook('sess_rival', 'Edit', { file_path: 'docs/a.md' }),
+    });
+    expect(docs.statusCode).toBe(202);
+  });
+
+  it('passes through in solo mode (no coordination authority to deny)', async () => {
+    const res = await api.app.inject({
+      method: 'POST',
+      url: '/v1/hooks/claude',
+      headers: auth(),
+      payload: preToolUseHook('sess_solo', 'Edit', { file_path: 'src/a.ts' }),
+    });
+    expect(res.statusCode).toBe(202);
+    expect(res.json().hookSpecificOutput).toBeUndefined();
   });
 });

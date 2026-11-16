@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ulid, makeId, parseEvent, type EventEnvelope } from '@weft/protocol';
-import { translateHook, AdapterError, type AdapterContext, type AdapterEvent } from './hooks.js';
+import { translateHook, AdapterError, denyPreToolUse, type AdapterContext, type AdapterEvent } from './hooks.js';
 import { CAPABILITY_MANIFEST } from './manifest.js';
 
 const ctx: AdapterContext = {
@@ -197,6 +197,17 @@ describe('adapter contract guarantees', () => {
       }
     }
     expect(CAPABILITY_MANIFEST.fidelity).toBe('high');
-    expect(CAPABILITY_MANIFEST.enforcement).toMatchObject({ preToolUse: true, mode: 'sync' });
+    expect(CAPABILITY_MANIFEST.enforcement).toMatchObject({ preToolUse: true, mode: 'sync', hardBlock: true });
+  });
+
+  it('builds a Claude Code PreToolUse deny response (hard enforcement boundary)', () => {
+    const decision = denyPreToolUse('reserved by another task');
+    expect(decision).toEqual({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: 'reserved by another task',
+      },
+    });
   });
 });
