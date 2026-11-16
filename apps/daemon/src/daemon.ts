@@ -25,6 +25,7 @@ import { CoordinationClient } from './coordination.js';
 import { EnforcementCache } from './enforcement.js';
 import { TaskCache } from './task-cache.js';
 import { Indexer } from './indexer.js';
+import { OverlapEngine } from './overlap.js';
 
 const DAEMON_VERSION = '0.0.0';
 
@@ -49,6 +50,7 @@ export class Daemon {
   readonly tasks: LocalTaskStore;
   readonly repos: RepoRegistry;
   readonly indexer: Indexer;
+  readonly overlap: OverlapEngine;
   readonly watcher: Watcher;
   readonly worktrees: WorktreeManager;
   readonly conflicts: ConflictDetector;
@@ -101,6 +103,15 @@ export class Daemon {
       registry: this.repos,
       store: this.store,
       binary: this.config.git.binary,
+      logger: this.logger,
+    });
+    this.overlap = new OverlapEngine({
+      deviceId: this.identity.device_id,
+      registry: this.repos,
+      store: this.store,
+      indexer: this.indexer,
+      actor: this.actor,
+      emit: (draft) => this.pipeline.enqueue(draftEvent(this.source, draft)),
       logger: this.logger,
     });
     this.watcher = new Watcher({

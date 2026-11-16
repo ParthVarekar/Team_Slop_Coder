@@ -14,6 +14,7 @@ import { RepoError } from './repos.js';
 import { WorktreeError } from './worktrees.js';
 import { ConflictDetectorError } from './conflicts.js';
 import { IndexerError } from './indexer.js';
+import { OverlapError } from './overlap.js';
 import { ValidationRunError } from './validation.js';
 import { draftEvent } from './events.js';
 import type { StoredLocalEvent } from './store.js';
@@ -628,6 +629,31 @@ export function createApiServer(daemon: Daemon, options: ApiServerOptions = {}):
         ? { edges: daemon.store.getSymbolEdges(id, branch, q.path ? { filePath: q.path } : {}) }
         : {}),
     };
+  });
+
+  // Symbol overlap (M3.2): L1/L2 semantic warnings across task branches. Reads the
+  // branch-scoped index (auto-indexing missing branches), intersects modified-symbol
+  // sets, and surfaces signature-change call sites. Incremental + deduped server-side.
+  app.post('/v1/repos/:id/overlaps', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const parsed = DetectConflictsBody.safeParse(req.body);
+    if (!parsed.success)
+      return reply.code(400).send({ error: 'validation', message: parsed.error.message });
+    try {
+      const result = await daemon.overlap.sweep(
+        id,
+        parsed.data.tasks.map((t) => ({ taskId: t.task_id, branch: t.branch })),
+        {
+          ...(parsed.data.base_ref ? { baseRef: parsed.data.base_ref } : {}),
+          ...(parsed.data.epoch !== undefined ? { epoch: parsed.data.epoch } : {}),
+        },
+      );
+      return reply.send(result);
+    } catch (err) {
+      if (err instanceof OverlapError)
+        return reply.code(404).send({ error: err.code, message: err.message });
+      throw err;
+    }
   });
 
   // Validation supervisor (M2.10): run configured checks in a detached worktree

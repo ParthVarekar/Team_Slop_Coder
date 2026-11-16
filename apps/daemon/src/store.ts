@@ -75,6 +75,19 @@ export interface FileIndexState {
   indexed_at: string;
 }
 
+export interface BranchIndexState {
+  repo_id: string;
+  branch: string;
+  head_oid: string;
+  file_count: number;
+  symbol_count: number;
+  last_indexed_at: string | null;
+}
+
+export interface FileIndexRow extends FileIndexState {
+  file_path: string;
+}
+
 const EVENT_COLUMNS = `event_id, v, device_id, project_id, repo_id, session_id, provider_session_id,
   task_id, seq, ts, type, actor, payload, privacy, received_at`;
 
@@ -493,6 +506,67 @@ export class LocalStore {
       .prepare('SELECT COUNT(*) AS c FROM symbols WHERE repo_id = ? AND branch = ?')
       .get(repoId, branch) as { c: number };
     return row.c;
+  }
+
+  listFileIndexState(repoId: string, branch: string): FileIndexRow[] {
+    return this.db
+      .prepare(
+        'SELECT file_path, content_hash, symbol_count, indexed_at FROM file_index_state WHERE repo_id = ? AND branch = ? ORDER BY file_path',
+      )
+      .all(repoId, branch) as FileIndexRow[];
+  }
+
+  getBranchIndexAggregate(
+    repoId: string,
+    branch: string,
+  ): { file_count: number; symbol_count: number; last_indexed_at: string | null } {
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) AS file_count, COALESCE(SUM(symbol_count), 0) AS symbol_count,
+                MAX(indexed_at) AS last_indexed_at
+           FROM file_index_state WHERE repo_id = ? AND branch = ?`,
+      )
+      .get(repoId, branch) as {
+      file_count: number;
+      symbol_count: number;
+      last_indexed_at: string | null;
+    };
+    return row;
+  }
+
+  setBranchIndexState(
+    repoId: string,
+    branch: string,
+    headOid: string,
+    fileCount: number,
+    symbolCount: number,
+    lastIndexedAt: string | null,
+  ): void {
+    this.db
+      .prepare(
+        `INSERT INTO branch_index_state
+           (repo_id, branch, head_oid, file_count, symbol_count, last_indexed_at)
+         VALUES (@repo_id, @branch, @head_oid, @file_count, @symbol_count, @last_indexed_at)
+         ON CONFLICT (repo_id, branch) DO UPDATE SET
+           head_oid = excluded.head_oid,
+           file_count = excluded.file_count,
+           symbol_count = excluded.symbol_count,
+           last_indexed_at = excluded.last_indexed_at`,
+      )
+      .run({
+        repo_id: repoId,
+        branch,
+        head_oid: headOid,
+        file_count: fileCount,
+        symbol_count: symbolCount,
+        last_indexed_at: lastIndexedAt,
+      });
+  }
+
+  getBranchIndexState(repoId: string, branch: string): BranchIndexState | undefined {
+    return this.db
+      .prepare('SELECT * FROM branch_index_state WHERE repo_id = ? AND branch = ?')
+      .get(repoId, branch) as BranchIndexState | undefined;
   }
 
   close(): void {

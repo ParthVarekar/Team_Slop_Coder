@@ -527,6 +527,52 @@ describe('repo API', () => {
     });
     expect(missingSym.statusCode).toBe(404);
   });
+
+  it('detects symbol overlaps across task branches', async () => {
+    const repoPath = makeGitRepo();
+    const g = (args: string[]) =>
+      execFileSync('git', args, { cwd: repoPath, encoding: 'utf8', windowsHide: true });
+    const lib = 'export function foo(): number {\n  const a = 1;\n  const b = 2;\n  return a + b;\n}\n';
+    writeFileSync(join(repoPath, 'lib.ts'), lib);
+    g(['add', '-A']);
+    g(['commit', '-qm', 'lib']);
+    g(['checkout', '-q', '-b', 'taskA']);
+    writeFileSync(join(repoPath, 'lib.ts'), lib.replace('const a = 1;', 'const a = 10;'));
+    g(['add', '-A']);
+    g(['commit', '-qm', 'a']);
+    g(['checkout', '-q', 'main']);
+    g(['checkout', '-q', '-b', 'taskB']);
+    writeFileSync(join(repoPath, 'lib.ts'), lib.replace('const b = 2;', 'const b = 20;'));
+    g(['add', '-A']);
+    g(['commit', '-qm', 'b']);
+    g(['checkout', '-q', 'main']);
+
+    const create = await api.app.inject({
+      method: 'POST',
+      url: '/v1/repos',
+      headers: auth(),
+      payload: { path: repoPath },
+    });
+    const repo = create.json().repo;
+    const res = await api.app.inject({
+      method: 'POST',
+      url: `/v1/repos/${repo.repo_id}/overlaps`,
+      headers: auth(),
+      payload: { tasks: [{ task_id: 'tA', branch: 'taskA' }, { task_id: 'tB', branch: 'taskB' }] },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().overlaps).toHaveLength(1);
+    expect(res.json().overlaps[0].symbols[0].name).toBe('foo');
+    expect(res.json().overlaps[0].severity).toBe('warning');
+
+    const missing = await api.app.inject({
+      method: 'POST',
+      url: '/v1/repos/repo_missing/overlaps',
+      headers: auth(),
+      payload: { tasks: [{ task_id: 'tA', branch: 'taskA' }] },
+    });
+    expect(missing.statusCode).toBe(404);
+  });
 });
 
 describe('worktree API', () => {

@@ -6,6 +6,7 @@ import {
   lsFiles,
   lsTree,
   metrics,
+  revParse,
   showFile,
   type Logger,
 } from '@weft/core';
@@ -110,6 +111,20 @@ export class Indexer {
     }
   }
 
+  /** Refresh the per-branch manifest the overlap engine uses as a cache fingerprint. */
+  private async recordManifest(repoId: string, branch: string, root: string): Promise<void> {
+    const headOid = (await revParse(root, branch, this.binary)) ?? '';
+    const agg = this.store.getBranchIndexAggregate(repoId, branch);
+    this.store.setBranchIndexState(
+      repoId,
+      branch,
+      headOid,
+      agg.file_count,
+      agg.symbol_count,
+      agg.last_indexed_at,
+    );
+  }
+
   private async indexOne(
     repoId: string,
     branch: string,
@@ -173,6 +188,7 @@ export class Indexer {
       }
     }
 
+    await this.recordManifest(repoId, branch, root);
     const duration_ms = performance.now() - started;
     this.options.logger?.debug(
       { repoId, branch, source, indexed, skipped, deleted, symbols, duration_ms },
@@ -224,6 +240,7 @@ export class Indexer {
       this.store.deleteFileSymbols(repoId, branch, file);
       removed++;
     }
+    await this.recordManifest(repoId, branch, root);
     return { indexed, skipped, deleted: removed };
   }
 }
