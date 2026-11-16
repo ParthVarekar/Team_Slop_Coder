@@ -26,6 +26,7 @@ import { EnforcementCache } from './enforcement.js';
 import { TaskCache } from './task-cache.js';
 import { Indexer } from './indexer.js';
 import { OverlapEngine } from './overlap.js';
+import { ResolverClient } from './resolver.js';
 
 const DAEMON_VERSION = '0.0.0';
 
@@ -51,6 +52,7 @@ export class Daemon {
   readonly repos: RepoRegistry;
   readonly indexer: Indexer;
   readonly overlap: OverlapEngine;
+  readonly resolver: ResolverClient;
   readonly watcher: Watcher;
   readonly worktrees: WorktreeManager;
   readonly conflicts: ConflictDetector;
@@ -114,6 +116,7 @@ export class Daemon {
       emit: (draft) => this.pipeline.enqueue(draftEvent(this.source, draft)),
       logger: this.logger,
     });
+    this.resolver = new ResolverClient(this.config.resolver, this.logger);
     this.watcher = new Watcher({
       registry: this.repos,
       actor: this.actor,
@@ -265,6 +268,7 @@ export class Daemon {
     this.pipeline.stop();
     await this.coordination?.stop();
     await this.shipper?.stop();
+    await this.resolver.stop();
     this.store.close();
     this.started = false;
     this.logger.info('daemon stopped');

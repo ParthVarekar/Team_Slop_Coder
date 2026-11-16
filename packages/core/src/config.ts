@@ -57,11 +57,21 @@ export const WeftConfigSchema = z.object({
     })
     .default({}),
   retention: z.object({ telemetryDays: z.number().int().positive().default(90) }).default({}),
+  resolver: z
+    .object({
+      /** Exact reference resolution runs in a separate process with its own budget. */
+      enabled: z.boolean().default(true),
+      maxMemoryMb: z.number().int().min(128).max(8192).default(1024),
+      idleTimeoutMs: z.number().int().positive().max(3_600_000).default(600_000),
+      requestTimeoutMs: z.number().int().positive().max(120_000).default(30_000),
+    })
+    .default({}),
 });
 
 export type WeftConfig = z.infer<typeof WeftConfigSchema>;
 export type WeftConfigInput = z.input<typeof WeftConfigSchema>;
 export type ValidationConfig = WeftConfig['validation'];
+export type ResolverConfig = WeftConfig['resolver'];
 
 /** Environment variable → dotted config path. */
 export const WEFT_ENV_MAP: Record<string, string> = {
@@ -80,6 +90,10 @@ export const WEFT_ENV_MAP: Record<string, string> = {
   WEFT_VALIDATION_TIMEOUT_MS: 'validation.timeoutMs',
   WEFT_VALIDATION_CONCURRENCY: 'validation.concurrency',
   WEFT_TELEMETRY_DAYS: 'retention.telemetryDays',
+  WEFT_RESOLVER_ENABLED: 'resolver.enabled',
+  WEFT_RESOLVER_MAX_MB: 'resolver.maxMemoryMb',
+  WEFT_RESOLVER_IDLE_MS: 'resolver.idleTimeoutMs',
+  WEFT_RESOLVER_REQUEST_TIMEOUT_MS: 'resolver.requestTimeoutMs',
 };
 
 type Plain = Record<string, unknown>;

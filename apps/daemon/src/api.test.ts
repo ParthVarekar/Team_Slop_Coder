@@ -573,6 +573,33 @@ describe('repo API', () => {
     });
     expect(missing.statusCode).toBe(404);
   });
+
+  it('rejects an unknown repo and an invalid body for exact references', async () => {
+    const missing = await api.app.inject({
+      method: 'POST',
+      url: '/v1/repos/repo_missing/references',
+      headers: auth(),
+      payload: { file_path: 'src/lib.ts', name: 'getUser' },
+    });
+    expect(missing.statusCode).toBe(404);
+
+    const repoPath = makeGitRepo();
+    const create = await api.app.inject({
+      method: 'POST',
+      url: '/v1/repos',
+      headers: auth(),
+      payload: { path: repoPath },
+    });
+    const repo = create.json().repo;
+    const bad = await api.app.inject({
+      method: 'POST',
+      url: `/v1/repos/${repo.repo_id}/references`,
+      headers: auth(),
+      payload: { name: 'getUser' },
+    });
+    expect(bad.statusCode).toBe(400);
+    expect(bad.json().error).toBe('validation');
+  });
 });
 
 describe('worktree API', () => {

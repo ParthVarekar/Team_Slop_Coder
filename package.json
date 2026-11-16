@@ -24,6 +24,7 @@
     "test:e2e:twodaemon": "node apps/daemon/e2e/two-daemon.mjs",
     "bench:index": "node --expose-gc apps/daemon/e2e/symbol-index-perf.mjs",
     "bench:overlap": "node apps/daemon/e2e/overlap-storm.mjs",
+    "bench:resolver": "node apps/daemon/e2e/resolver-perf.mjs",
     "bench": "pnpm --filter @weft/bench run bench",
     "check": "pnpm run build && pnpm run lint && pnpm run test"
   },

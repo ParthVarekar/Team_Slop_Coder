@@ -15,6 +15,7 @@ import { WorktreeError } from './worktrees.js';
 import { ConflictDetectorError } from './conflicts.js';
 import { IndexerError } from './indexer.js';
 import { OverlapError } from './overlap.js';
+import { ResolverError } from './resolver.js';
 import { ValidationRunError } from './validation.js';
 import { draftEvent } from './events.js';
 import type { StoredLocalEvent } from './store.js';
@@ -80,6 +81,13 @@ const DetectConflictsBody = z.object({
 const IndexRepoBody = z.object({
   branch: z.string().min(1).max(255).optional(),
   from_ref: z.boolean().optional(),
+});
+const ReferencesBody = z.object({
+  file_path: z.string().min(1).max(4096),
+  name: z.string().min(1).max(255),
+  container: z.string().max(255).optional(),
+  kind: z.string().max(64).optional(),
+  start_line: z.number().int().positive().optional(),
 });
 
 function worktreeErrorReply(reply: FastifyReply, err: WorktreeError): FastifyReply {
@@ -652,6 +660,34 @@ export function createApiServer(daemon: Daemon, options: ApiServerOptions = {}):
     } catch (err) {
       if (err instanceof OverlapError)
         return reply.code(404).send({ error: err.code, message: err.message });
+      throw err;
+    }
+  });
+
+  // Exact reference resolution (M3.3, L2): TS Compiler API findReferences in a
+  // separate, memory-budgeted resolver process. On-demand — never in the overlap
+  // hot path. Returns precise, type-based call sites (vs the name-based fast tier).
+  app.post('/v1/repos/:id/references', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const repo = daemon.repos.get(id);
+    if (!repo) return reply.code(404).send({ error: 'not_found' });
+    const parsed = ReferencesBody.safeParse(req.body);
+    if (!parsed.success)
+      return reply.code(400).send({ error: 'validation', message: parsed.error.message });
+    try {
+      const result = await daemon.resolver.resolve(repo.root_path, {
+        filePath: parsed.data.file_path,
+        name: parsed.data.name,
+        ...(parsed.data.container ? { container: parsed.data.container } : {}),
+        ...(parsed.data.kind ? { kind: parsed.data.kind } : {}),
+        ...(parsed.data.start_line !== undefined ? { startLine: parsed.data.start_line } : {}),
+      });
+      return reply.send({ repo_id: id, ...result });
+    } catch (err) {
+      if (err instanceof ResolverError) {
+        const status = err.code === 'disabled' ? 503 : err.code === 'timeout' ? 504 : 500;
+        return reply.code(status).send({ error: err.code, message: err.message });
+      }
       throw err;
     }
   });
