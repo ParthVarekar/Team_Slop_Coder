@@ -1,0 +1,38 @@
+{
+  "name": "@weft/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Weft team server — ingest, coordination, merge queue, health baselines, RBAC, audit.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "weft-server": "./dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "start": "node dist/cli.js start",
+    "dev": "tsx src/cli.ts start"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.4.1",
+    "@weft/core": "workspace:*",
+    "@weft/protocol": "workspace:*",
+    "fastify": "^5.12.8",
+    "pg": "^8.13.1",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.10",
+    "embedded-postgres": "16.15.0-beta.19"
+  }
+}

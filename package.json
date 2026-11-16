@@ -1,0 +1,39 @@
+{
+  "name": "weft",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Weft — local-first coordination, observability and verification for teams of developers and AI coding agents.",
+  "license": "UNLICENSED",
+  "packageManager": "pnpm@11.25.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "tsc -b tsconfig.json && pnpm --filter @weft/ui build",
+    "typecheck": "tsc -b tsconfig.json && pnpm --filter @weft/ui typecheck",
+    "clean": "tsc -b tsconfig.json --clean",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "node apps/ui/e2e/golden-path.mjs",
+    "test:e2e:team": "node apps/ui/e2e/team-view.mjs",
+    "test:e2e:twodev": "node apps/ui/e2e/two-dev.mjs",
+    "bench": "pnpm --filter @weft/bench run bench",
+    "check": "pnpm run build && pnpm run lint && pnpm run test"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@types/node": "^24.19.2",
+    "eslint": "^9.39.5",
+    "fast-check": "^3.23.2",
+    "playwright": "^1.63.0",
+    "prettier": "^3.4.2",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.72.1",
+    "vitest": "^3.2.7"
+  }
+}

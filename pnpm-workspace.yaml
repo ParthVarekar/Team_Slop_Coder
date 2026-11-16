@@ -1,0 +1,12 @@
+packages:
+  - 'packages/*'
+  - 'apps/*'
+  - 'adapters/*'
+  - 'bench'
+
+# pnpm >=11 build-script approval: native modules trusted to run install scripts.
+allowBuilds:
+  better-sqlite3: true
+  esbuild: true
+  '@parcel/watcher': true
+  '@embedded-postgres/windows-x64': true

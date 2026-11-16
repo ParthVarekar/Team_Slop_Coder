@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+*.tsbuildinfo
+coverage/
+
+# Bench artifacts (regenerated; baselines are checked in separately)
+bench/artifacts/runs/
+
+# Local data / runtime
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.db
+.weft/
+data/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Logs
+*.log

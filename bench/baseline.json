@@ -1,0 +1,7 @@
+{
+  "redact_strings": 775839.7301319088,
+  "protocol_parse": 189382.35407190048,
+  "protocol_json_roundtrip": 511534.8552177323,
+  "hook_path_enqueue": 121877.26082318825,
+  "sqlite_batch_insert": 141729.68322707154
+}

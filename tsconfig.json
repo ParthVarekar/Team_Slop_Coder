@@ -1,0 +1,12 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/protocol" },
+    { "path": "packages/core" },
+    { "path": "apps/daemon" },
+    { "path": "apps/server" },
+    { "path": "adapters/claude-code" },
+    { "path": "adapters/codex" },
+    { "path": "bench" }
+  ]
+}
