@@ -10,6 +10,7 @@ export default defineConfig({
       '@weft/core': r('./packages/core/src/index.ts'),
       '@weft/adapter-claude-code': r('./adapters/claude-code/src/index.ts'),
       '@weft/adapter-codex': r('./adapters/codex/src/index.ts'),
+      '@weft/adapter-opencode': r('./adapters/opencode/src/index.ts'),
     },
   },
   test: {

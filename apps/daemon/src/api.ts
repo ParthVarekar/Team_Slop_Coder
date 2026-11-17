@@ -9,6 +9,10 @@ import {
   AdapterError as CodexAdapterError,
   CAPABILITY_MANIFEST as CODEX_MANIFEST,
 } from '@weft/adapter-codex';
+import {
+  OpenCodeTranslator,
+  AdapterError as OpenCodeAdapterError,
+} from '@weft/adapter-opencode';
 import type { Daemon } from './daemon.js';
 import { TaskError, UpdateTaskInputSchema } from './tasks.js';
 import { RepoError } from './repos.js';
@@ -17,6 +21,7 @@ import { ConflictDetectorError } from './conflicts.js';
 import { IndexerError } from './indexer.js';
 import { OverlapError } from './overlap.js';
 import { ResolverError } from './resolver.js';
+import { ModuleGraphError, dependentsOf } from './module-graph.js';
 import { ValidationRunError } from './validation.js';
 import { draftEvent } from './events.js';
 import { CoordinationRpcError } from './coordination-rpc.js';
@@ -120,6 +125,11 @@ const ReferencesBody = z.object({
   container: z.string().max(255).optional(),
   kind: z.string().max(64).optional(),
   start_line: z.number().int().positive().optional(),
+});
+const ModuleGraphBody = z.object({
+  path: z.string().min(1).max(4096).optional(),
+  exclude: z.string().min(1).max(2000).optional(),
+  changed_paths: z.array(z.string().min(1).max(4096)).max(5000).optional(),
 });
 
 function worktreeErrorReply(reply: FastifyReply, err: WorktreeError): FastifyReply {
@@ -252,6 +262,9 @@ export function createApiServer(daemon: Daemon, options: ApiServerOptions = {}):
     projectId: daemon.identity.project_id,
     userId: daemon.identity.user_id,
   };
+  // OpenCode tool name/input/result are split across SSE frames correlated by
+  // tool-call id, so one stateful translator serves the whole daemon.
+  const opencodeTranslator = new OpenCodeTranslator(adapterContext);
 
   app.addHook('preHandler', async (req, reply) => {
     const path = req.url.split('?')[0] ?? '';
@@ -328,6 +341,21 @@ export function createApiServer(daemon: Daemon, options: ApiServerOptions = {}):
       events = translateCodexNotify(req.body, adapterContext);
     } catch (err) {
       if (err instanceof CodexAdapterError)
+        return reply.code(422).send({ error: err.code, message: err.message });
+      throw err;
+    }
+    return ingestAdapterEvents(daemon, events, reply);
+  });
+
+  // OpenCode durable session-event stream (SSE frames bridged via POST). Observe-
+  // only: no PreToolUse enforcement. Accepts a single frame or a batch of frames.
+  app.post('/v1/opencode/event', async (req, reply) => {
+    const frames = Array.isArray(req.body) ? req.body : [req.body];
+    const events: TranslatedEvent[] = [];
+    try {
+      for (const frame of frames) events.push(...opencodeTranslator.translate(frame));
+    } catch (err) {
+      if (err instanceof OpenCodeAdapterError)
         return reply.code(422).send({ error: err.code, message: err.message });
       throw err;
     }
@@ -861,6 +889,39 @@ export function createApiServer(daemon: Daemon, options: ApiServerOptions = {}):
     } catch (err) {
       if (err instanceof ResolverError) {
         const status = err.code === 'disabled' ? 503 : err.code === 'timeout' ? 504 : 500;
+        return reply.code(status).send({ error: err.code, message: err.message });
+      }
+      throw err;
+    }
+  });
+
+  // Module graph (M3.6): dependency-cruiser import graph projected to local source
+  // modules. With changed_paths, returns the transitive reverse-dependency closure
+  // (coarse module-level impact tier); otherwise the full graph. On-demand, read-only.
+  app.post('/v1/repos/:id/module-graph', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const parsed = ModuleGraphBody.safeParse(req.body ?? {});
+    if (!parsed.success)
+      return reply.code(400).send({ error: 'validation', message: parsed.error.message });
+    try {
+      const graph = await daemon.moduleGraph.build(id, {
+        ...(parsed.data.path ? { path: parsed.data.path } : {}),
+        ...(parsed.data.exclude ? { exclude: parsed.data.exclude } : {}),
+      });
+      if (parsed.data.changed_paths) {
+        return reply.send({
+          repo_id: id,
+          changed_paths: parsed.data.changed_paths,
+          impacted: dependentsOf(graph, parsed.data.changed_paths),
+          modules: graph.modules.length,
+          edges: graph.edges,
+          duration_ms: graph.duration_ms,
+        });
+      }
+      return reply.send(graph);
+    } catch (err) {
+      if (err instanceof ModuleGraphError) {
+        const status = err.code === 'not_found' ? 404 : 500;
         return reply.code(status).send({ error: err.code, message: err.message });
       }
       throw err;

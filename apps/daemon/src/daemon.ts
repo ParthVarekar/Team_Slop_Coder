@@ -30,6 +30,7 @@ import { DaemonMcpBackend } from './mcp-backend.js';
 import { Indexer } from './indexer.js';
 import { OverlapEngine } from './overlap.js';
 import { ResolverClient } from './resolver.js';
+import { ModuleGraphService } from './module-graph.js';
 
 const DAEMON_VERSION = '0.0.0';
 
@@ -56,6 +57,7 @@ export class Daemon {
   readonly indexer: Indexer;
   readonly overlap: OverlapEngine;
   readonly resolver: ResolverClient;
+  readonly moduleGraph: ModuleGraphService;
   readonly watcher: Watcher;
   readonly worktrees: WorktreeManager;
   readonly conflicts: ConflictDetector;
@@ -125,6 +127,7 @@ export class Daemon {
       logger: this.logger,
     });
     this.resolver = new ResolverClient(this.config.resolver, this.logger);
+    this.moduleGraph = new ModuleGraphService({ registry: this.repos, logger: this.logger });
     this.watcher = new Watcher({
       registry: this.repos,
       actor: this.actor,

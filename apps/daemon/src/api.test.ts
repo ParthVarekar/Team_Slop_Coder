@@ -288,6 +288,50 @@ describe('local API', () => {
     expect(res.statusCode).toBe(422);
   });
 
+  it('translates an OpenCode SSE frame batch with cross-frame tool correlation', async () => {
+    const sid = 'ses_oc_api';
+    const f = (type: string, data: Record<string, unknown> = {}) => ({
+      type,
+      data: { sessionID: sid, ...data },
+      durable: { aggregateID: sid, seq: 1, version: 1 },
+    });
+    const res = await api.app.inject({
+      method: 'POST',
+      url: '/v1/opencode/event',
+      headers: auth(),
+      payload: [
+        f('session.created', { location: { directory: '/repo' }, model: { providerID: 'anthropic', modelID: 'claude-sonnet-4-5' } }),
+        f('session.tool.input.started', { id: 't1', name: 'edit' }),
+        f('session.tool.called', { id: 't1', input: { filePath: 'src/a.ts', oldString: 'x', newString: 'y' }, executed: true }),
+        f('session.tool.success', { id: 't1', content: [{ type: 'text', text: 'edited' }], executed: true }),
+      ],
+    });
+    expect(res.statusCode).toBe(202);
+    expect(res.json().accepted).toBe(4);
+    daemon.pipeline.flush();
+    const events = await api.app.inject({ method: 'GET', url: '/v1/events', headers: auth() });
+    expect(events.json().events.map((e: { type: string }) => e.type)).toEqual([
+      'session.started',
+      'tool.pre',
+      'tool.post',
+      'file.changed',
+    ]);
+    const sessions = await api.app.inject({ method: 'GET', url: '/v1/sessions', headers: auth() });
+    expect(sessions.json().sessions).toHaveLength(1);
+    expect(sessions.json().sessions[0].provider_session_id).toBe(sid);
+    expect(sessions.json().sessions[0].provider_id).toBe('opencode');
+  });
+
+  it('rejects malformed OpenCode frames with 422', async () => {
+    const res = await api.app.inject({
+      method: 'POST',
+      url: '/v1/opencode/event',
+      headers: auth(),
+      payload: { type: 'session.created' },
+    });
+    expect(res.statusCode).toBe(422);
+  });
+
   it('creates, reads, updates and transitions a task', async () => {
     const create = await api.app.inject({
       method: 'POST',
