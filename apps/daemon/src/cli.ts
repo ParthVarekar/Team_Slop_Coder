@@ -55,6 +55,8 @@ Commands:
   start      Run the daemon + local API in the foreground
   stop       Stop a running daemon (via pidfile)
   status     Query a running daemon's /healthz
+  mcp        Run the MCP coordination server over stdio (agent integration;
+             requires a running daemon: weft start)
   repo       Manage watched repositories against a running daemon:
                repo add <path>    Register + watch a git repository
                repo list          List active repositories
@@ -217,6 +219,28 @@ async function repoCommand(positionals: string[], flags: Record<string, string>)
   }
 }
 
+async function mcpCommand(flags: Record<string, string>): Promise<void> {
+  const config = resolveConfig(flags);
+  const identityPath = join(config.dataDir, 'identity.json');
+  if (!existsSync(identityPath)) {
+    console.error('no daemon identity found; start the daemon first (weft start)');
+    process.exitCode = 1;
+    return;
+  }
+  const identity = JSON.parse(readFileSync(identityPath, 'utf8')) as { hook_secret?: string };
+  const baseUrl = `http://${config.hooks.host}:${config.hooks.port}`;
+  // Lazy-load the MCP SDK so `weft start` never pays for it. stdout is reserved
+  // for the JSON-RPC transport; all diagnostics go to stderr.
+  const { connectStdioMcp } = await import('./mcp-client.js');
+  const handle = await connectStdioMcp({ baseUrl, secret: identity.hook_secret ?? '' });
+  const shutdown = async (): Promise<void> => {
+    await handle.close();
+    process.exit(0);
+  };
+  process.on('SIGINT', () => void shutdown());
+  process.on('SIGTERM', () => void shutdown());
+}
+
 async function main(): Promise<void> {
   const { command, positionals, flags } = parseArgs(process.argv.slice(2));
   switch (command) {
@@ -228,6 +252,9 @@ async function main(): Promise<void> {
       break;
     case 'status':
       await status(flags);
+      break;
+    case 'mcp':
+      await mcpCommand(flags);
       break;
     case 'repo':
       await repoCommand(positionals, flags);

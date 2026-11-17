@@ -24,6 +24,7 @@
     "dev": "tsx src/cli.ts start"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@weft/adapter-claude-code": "workspace:*",
     "@weft/adapter-codex": "workspace:*",
     "@weft/core": "workspace:*",

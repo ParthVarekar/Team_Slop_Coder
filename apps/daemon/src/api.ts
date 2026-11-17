@@ -19,6 +19,7 @@ import { OverlapError } from './overlap.js';
 import { ResolverError } from './resolver.js';
 import { ValidationRunError } from './validation.js';
 import { draftEvent } from './events.js';
+import { CoordinationRpcError } from './coordination-rpc.js';
 import type { StoredLocalEvent } from './store.js';
 
 const HEARTBEAT_MS = 15_000;
@@ -60,6 +61,36 @@ const ReservationCheckBody = z.object({
   path: z.string().min(1).max(4096),
   task_id: z.string().min(1).optional(),
 });
+const ContextQuery = z.object({
+  task_id: z.string().min(1),
+  budget_bytes: z.coerce.number().int().positive().max(65536).optional(),
+});
+const McpClaimBody = z.object({
+  task_id: z.string().min(1),
+  base_version: z.number().int().nonnegative().optional(),
+  provisional: z.boolean().optional(),
+});
+const McpProgressBody = z.object({
+  task_id: z.string().min(1),
+  note: z.string().min(1).max(8000),
+  percent: z.number().min(0).max(100).optional(),
+});
+const McpReserveBody = z.object({
+  repo_id: z.string().min(1),
+  task_id: z.string().min(1),
+  path_glob: z.string().min(1).max(4096),
+  mode: z.enum(['soft', 'hard']).optional(),
+  ttl_ms: z.number().int().positive().max(3_600_000).optional(),
+  session_id: z.string().min(1).optional(),
+});
+
+function mcpErrorReply(reply: FastifyReply, err: unknown): FastifyReply {
+  if (err instanceof CoordinationRpcError) {
+    const status = err.status >= 400 && err.status < 600 ? err.status : 502;
+    return reply.code(status).send({ error: err.code, message: err.message });
+  }
+  return reply.code(422).send({ error: 'mcp_error', message: err instanceof Error ? err.message : String(err) });
+}
 
 function repoErrorReply(reply: FastifyReply, err: RepoError): FastifyReply {
   const status = err.code === 'not_found' ? 404 : 422;
@@ -339,6 +370,95 @@ export function createApiServer(daemon: Daemon, options: ApiServerOptions = {}):
       return reply.code(400).send({ error: 'validation', message: parsed.error.message });
     const result = daemon.enforcement.checkReservation(parsed.data.path, parsed.data.task_id);
     return { result, stale: daemon.enforcement.isStale() };
+  });
+
+  // MCP coordination surface (M3.5). The `weft mcp` stdio process is a thin HTTP
+  // client of these endpoints; the daemon owns coordination + server RPC. Context
+  // is the deterministic ≤2KB block (full ranked facts included here for the UI).
+  app.get('/v1/context', async (req, reply) => {
+    const q = ContextQuery.safeParse(req.query);
+    if (!q.success) return reply.code(400).send({ error: 'validation', message: q.error.message });
+    try {
+      return await daemon.mcp.getConcurrentChanges(q.data.task_id, {
+        ...(q.data.budget_bytes != null ? { budgetBytes: q.data.budget_bytes } : {}),
+      });
+    } catch (err) {
+      return mcpErrorReply(reply, err);
+    }
+  });
+
+  app.get('/v1/mcp/task/:id', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    try {
+      return await daemon.mcp.getTask(id);
+    } catch (err) {
+      return mcpErrorReply(reply, err);
+    }
+  });
+
+  app.post('/v1/mcp/claim', async (req, reply) => {
+    const b = McpClaimBody.safeParse(req.body);
+    if (!b.success) return reply.code(400).send({ error: 'validation', message: b.error.message });
+    try {
+      return await daemon.mcp.claimTask(b.data.task_id, {
+        ...(b.data.base_version != null ? { baseVersion: b.data.base_version } : {}),
+        ...(b.data.provisional != null ? { provisional: b.data.provisional } : {}),
+      });
+    } catch (err) {
+      return mcpErrorReply(reply, err);
+    }
+  });
+
+  app.post('/v1/mcp/progress', async (req, reply) => {
+    const b = McpProgressBody.safeParse(req.body);
+    if (!b.success) return reply.code(400).send({ error: 'validation', message: b.error.message });
+    try {
+      return await daemon.mcp.reportProgress(b.data.task_id, b.data.note, {
+        ...(b.data.percent != null ? { percent: b.data.percent } : {}),
+      });
+    } catch (err) {
+      return mcpErrorReply(reply, err);
+    }
+  });
+
+  app.post('/v1/mcp/reserve', async (req, reply) => {
+    const b = McpReserveBody.safeParse(req.body);
+    if (!b.success) return reply.code(400).send({ error: 'validation', message: b.error.message });
+    try {
+      return await daemon.mcp.reserveFiles({
+        repo_id: b.data.repo_id,
+        task_id: b.data.task_id,
+        path_glob: b.data.path_glob,
+        ...(b.data.mode != null ? { mode: b.data.mode } : {}),
+        ...(b.data.ttl_ms != null ? { ttl_ms: b.data.ttl_ms } : {}),
+        ...(b.data.session_id != null ? { session_id: b.data.session_id } : {}),
+      });
+    } catch (err) {
+      return mcpErrorReply(reply, err);
+    }
+  });
+
+  // Live coordination events for the MCP push channel (Claude channels). Team
+  // mode only emits; solo subscribers idle. Loopback + hook-secret gated.
+  app.get('/v1/coordination/stream', async (req, reply) => {
+    reply.raw.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    reply.raw.write('retry: 2000\n\n');
+    const unsubscribe = daemon.subscribeCoordination((event) => {
+      reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+    });
+    const heartbeat = setInterval(() => reply.raw.write(': hb\n\n'), HEARTBEAT_MS);
+    const cleanup = (): void => {
+      clearInterval(heartbeat);
+      unsubscribe();
+    };
+    req.raw.on('close', cleanup);
+    reply.raw.on('error', cleanup);
+    return reply;
   });
 
   // Team-mode authoritative task projection (null in solo mode). The server is

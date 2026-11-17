@@ -2,6 +2,7 @@ import { metrics, type Logger } from '@weft/core';
 import type { StoredEvent } from '@weft/protocol';
 import type { EnforcementCache } from './enforcement.js';
 import type { TaskCache } from './task-cache.js';
+import type { ChangeCache } from './change-cache.js';
 import type { LocalStore } from './store.js';
 
 const received = metrics.counter('weft_coordination_events_received_total', 'Coordination events applied');
@@ -17,6 +18,7 @@ export interface CoordinationOptions {
   projectId: string;
   cache: EnforcementCache;
   taskCache?: TaskCache;
+  changeCache?: ChangeCache;
   store?: LocalStore;
   fetchImpl?: typeof fetch;
   logger?: Logger;
@@ -39,6 +41,7 @@ export class CoordinationClient {
   private readonly projectId: string;
   private readonly cache: EnforcementCache;
   private readonly taskCache: TaskCache | undefined;
+  private readonly changeCache: ChangeCache | undefined;
   private readonly store: LocalStore | undefined;
   private readonly fetchImpl: typeof fetch;
   private readonly logger: Logger | undefined;
@@ -60,6 +63,7 @@ export class CoordinationClient {
     this.projectId = options.projectId;
     this.cache = options.cache;
     this.taskCache = options.taskCache;
+    this.changeCache = options.changeCache;
     this.store = options.store;
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.logger = options.logger;
@@ -95,6 +99,7 @@ export class CoordinationClient {
       connectedGauge.set(0);
       this.cache.setStale(true);
       this.taskCache?.setStale(true);
+      this.changeCache?.setStale(true);
       if (this.closed) break;
       reconnects.inc();
       await this.sleep(this.backoff);
@@ -120,6 +125,7 @@ export class CoordinationClient {
     connectedGauge.set(1);
     this.cache.setStale(false);
     this.taskCache?.setStale(false);
+    this.changeCache?.setStale(false);
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
@@ -161,6 +167,7 @@ export class CoordinationClient {
       const minSeq = typeof parsed.min_seq === 'number' ? parsed.min_seq : 0;
       this.cache.clear();
       this.taskCache?.clear();
+      this.changeCache?.clear();
       this.cursor = Math.max(0, minSeq - 1);
       this.persistCursor();
       resyncs.inc();
@@ -172,6 +179,7 @@ export class CoordinationClient {
     if (typeof stored.global_seq !== 'number') return;
     this.cache.applyEvent(stored);
     this.taskCache?.applyEvent(stored);
+    this.changeCache?.applyEvent(stored);
     if (stored.global_seq > this.cursor) {
       this.cursor = stored.global_seq;
       this.persistCursor();
@@ -208,5 +216,6 @@ export class CoordinationClient {
     connectedGauge.set(0);
     this.cache.setStale(true);
     this.taskCache?.setStale(true);
+    this.changeCache?.setStale(true);
   }
 }

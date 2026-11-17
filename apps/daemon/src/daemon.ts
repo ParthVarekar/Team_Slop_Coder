@@ -9,7 +9,7 @@ import {
   type Logger,
   type GitCapabilities,
 } from '@weft/core';
-import { makeId, type Actor } from '@weft/protocol';
+import { makeId, type Actor, type StoredEvent } from '@weft/protocol';
 import { LocalStore, type StoredLocalEvent } from './store.js';
 import { EventPipeline, type EnqueueResult } from './pipeline.js';
 import { LocalTaskStore } from './tasks.js';
@@ -24,6 +24,9 @@ import { OutboxShipper } from './shipper.js';
 import { CoordinationClient } from './coordination.js';
 import { EnforcementCache } from './enforcement.js';
 import { TaskCache } from './task-cache.js';
+import { ChangeCache } from './change-cache.js';
+import { CoordinationRpc } from './coordination-rpc.js';
+import { DaemonMcpBackend } from './mcp-backend.js';
 import { Indexer } from './indexer.js';
 import { OverlapEngine } from './overlap.js';
 import { ResolverClient } from './resolver.js';
@@ -64,9 +67,14 @@ export class Daemon {
   readonly taskCache: TaskCache | null = null;
   readonly shipper: OutboxShipper | null = null;
   readonly coordination: CoordinationClient | null = null;
+  readonly changeCache: ChangeCache | null = null;
+  readonly rpc: CoordinationRpc | null = null;
+  /** MCP coordination backend (always present; team mutations use rpc when configured). */
+  readonly mcp: DaemonMcpBackend;
   gitCapabilities: GitCapabilities | null = null;
 
   private readonly flushListeners = new Set<FlushListener>();
+  private readonly coordinationListeners = new Set<(event: StoredEvent) => void>();
   private readonly sessionCache = new Map<string, string>();
   private started = false;
 
@@ -161,6 +169,7 @@ export class Daemon {
     const { url, token } = this.config.server;
     if (this.config.mode === 'team' && url && token) {
       this.enforcement = new EnforcementCache();
+      this.changeCache = new ChangeCache();
       this.taskCache = new TaskCache({
         onClaimRejected: (rejection) => {
           this.logger.warn(
@@ -191,17 +200,28 @@ export class Daemon {
         store: this.store,
         logger: this.logger,
       });
+      this.rpc = new CoordinationRpc({
+        baseUrl: url,
+        token,
+        projectId: this.identity.project_id,
+        logger: this.logger,
+      });
       this.coordination = new CoordinationClient({
         baseUrl: url,
         token,
         projectId: this.identity.project_id,
         cache: this.enforcement,
         taskCache: this.taskCache,
+        changeCache: this.changeCache,
         store: this.store,
         logger: this.logger,
+        onEvent: (event) => {
+          for (const listener of this.coordinationListeners) listener(event);
+        },
       });
       this.flushListeners.add(() => this.shipper?.notify());
     }
+    this.mcp = new DaemonMcpBackend(this, this.rpc, this.changeCache);
   }
 
   /** Subscribe to durable batch flushes (drives local SSE). Returns unsubscribe. */
@@ -209,6 +229,14 @@ export class Daemon {
     this.flushListeners.add(listener);
     return () => {
       this.flushListeners.delete(listener);
+    };
+  }
+
+  /** Subscribe to projected coordination events (drives the MCP push channel). */
+  subscribeCoordination(listener: (event: StoredEvent) => void): () => void {
+    this.coordinationListeners.add(listener);
+    return () => {
+      this.coordinationListeners.delete(listener);
     };
   }
 
