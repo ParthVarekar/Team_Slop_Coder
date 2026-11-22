@@ -11,6 +11,13 @@ import {
   mergeTreeWriteTree,
   diffNameOnly,
   mergeBase,
+  commitTree,
+  fetch,
+  pushWithPrecondition,
+  updateRef,
+  commitParents,
+  logRange,
+  commitChangedPaths,
   metrics,
 } from '@weft/core';
 
@@ -323,5 +330,195 @@ describe('mergeBase', () => {
     g(repo, ['add', '-A']);
     g(repo, ['commit', '-qm', 'orphan']);
     expect(await mergeBase(repo, 'A', 'orphan')).toBeNull();
+  });
+});
+
+function makeBare(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'weft-bare-'));
+  dirs.push(dir);
+  g(dir, ['init', '-q', '--bare', '-b', 'main']);
+  return dir;
+}
+
+describe('commitTree (merge-queue materialization)', () => {
+  it('creates a commit from a tree + parent without touching HEAD/index/worktree', async () => {
+    const repo = makeRepo();
+    const base = g(repo, ['rev-parse', 'HEAD']);
+    const tree = g(repo, ['rev-parse', 'HEAD^{tree}']);
+    const commit = await commitTree(repo, tree, { parents: [base], message: 'speculative' });
+    expect(commit).toMatch(/^[0-9a-f]{40}$/);
+    expect(commit).not.toBe(base);
+    expect(g(repo, ['rev-parse', 'HEAD'])).toBe(base);
+    expect(g(repo, ['status', '--porcelain'])).toBe('');
+    expect(g(repo, ['diff', '--cached', '--name-only'])).toBe('');
+    expect(await commitParents(repo, commit)).toEqual([base]);
+    // Dangling until update-ref makes it reachable.
+    await updateRef(repo, 'refs/weft/queue/spec', commit);
+    expect(g(repo, ['rev-parse', 'refs/weft/queue/spec'])).toBe(commit);
+    expect(g(repo, ['show', 'refs/weft/queue/spec:base.txt'])).toBe('base');
+  });
+
+  it('materializes a two-parent merge from a merge-tree result', async () => {
+    const repo = makeRepo();
+    const base = g(repo, ['rev-parse', 'HEAD']);
+    const oidA = branchWith(repo, 'A', base, { 'a.txt': 'a\n' });
+    const oidB = branchWith(repo, 'B', base, { 'b.txt': 'b\n' });
+    const merged = await mergeTreeWriteTree(repo, 'A', 'B');
+    expect(merged.clean).toBe(true);
+    const commit = await commitTree(repo, merged.treeOid, {
+      parents: [oidA, oidB],
+      message: 'merge A+B',
+    });
+    expect(await commitParents(repo, commit)).toEqual([oidA, oidB]);
+    await updateRef(repo, 'refs/weft/queue/merge', commit);
+    expect(g(repo, ['show', 'refs/weft/queue/merge:a.txt'])).toBe('a');
+    expect(g(repo, ['show', 'refs/weft/queue/merge:b.txt'])).toBe('b');
+  });
+
+  it('rejects an invalid tree oid', async () => {
+    const repo = makeRepo();
+    await expect(commitTree(repo, 'not-an-oid', { message: 'x' })).rejects.toThrow();
+  });
+});
+
+describe('updateRef (local ref CAS)', () => {
+  it('creates unconditionally, then enforces the old-OID precondition', async () => {
+    const repo = makeRepo();
+    const base = g(repo, ['rev-parse', 'HEAD']);
+    const tree = g(repo, ['rev-parse', 'HEAD^{tree}']);
+    const c1 = await commitTree(repo, tree, { parents: [base], message: 'c1' });
+    const c2 = await commitTree(repo, tree, { parents: [base], message: 'c2' });
+    expect(await updateRef(repo, 'refs/weft/cas', c1)).toBe(true);
+    // null precondition = must be absent; it exists, so this fails.
+    expect(await updateRef(repo, 'refs/weft/cas', c2, null)).toBe(false);
+    // Correct old-OID advances the ref.
+    expect(await updateRef(repo, 'refs/weft/cas', c2, c1)).toBe(true);
+    expect(g(repo, ['rev-parse', 'refs/weft/cas'])).toBe(c2);
+    // Stale old-OID (c1) no longer matches (c2): lost race, ref unchanged.
+    expect(await updateRef(repo, 'refs/weft/cas', c1, c1)).toBe(false);
+    expect(g(repo, ['rev-parse', 'refs/weft/cas'])).toBe(c2);
+  });
+});
+
+describe('fetch + pushWithPrecondition (origin CAS)', () => {
+  it('fetch updates remote-tracking refs without moving local HEAD', async () => {
+    const origin = makeBare();
+    const work = makeRepo();
+    g(work, ['remote', 'add', 'origin', origin]);
+    const base = g(work, ['rev-parse', 'HEAD']);
+    g(work, ['push', '-q', 'origin', 'HEAD:refs/heads/main']);
+    await fetch(work);
+    expect(g(work, ['rev-parse', 'refs/remotes/origin/main'])).toBe(base);
+
+    writeFileSync(join(work, 'next.txt'), 'next\n');
+    g(work, ['add', '-A']);
+    g(work, ['commit', '-qm', 'next']);
+    const next = g(work, ['rev-parse', 'HEAD']);
+    g(work, ['push', '-q', 'origin', 'HEAD:refs/heads/main']);
+    await fetch(work);
+    expect(g(work, ['rev-parse', 'refs/remotes/origin/main'])).toBe(next);
+    expect(g(work, ['rev-parse', 'HEAD'])).toBe(next);
+  });
+
+  it('lands a push when the old-OID precondition matches', async () => {
+    const origin = makeBare();
+    const work = makeRepo();
+    g(work, ['remote', 'add', 'origin', origin]);
+    const base = g(work, ['rev-parse', 'HEAD']);
+    g(work, ['push', '-q', 'origin', 'HEAD:refs/heads/main']);
+    writeFileSync(join(work, 'next.txt'), 'next\n');
+    g(work, ['add', '-A']);
+    g(work, ['commit', '-qm', 'next']);
+    const next = g(work, ['rev-parse', 'HEAD']);
+
+    const res = await pushWithPrecondition(work, {
+      source: 'HEAD',
+      destination: 'main',
+      expectedOldOid: base,
+    });
+    expect(res.ok).toBe(true);
+    expect(res.newOid).toBe(next);
+    expect(g(origin, ['rev-parse', 'refs/heads/main'])).toBe(next);
+  });
+
+  it('rejects a stale precondition with reason=stale and never overwrites origin', async () => {
+    const origin = makeBare();
+    const work = makeRepo();
+    g(work, ['remote', 'add', 'origin', origin]);
+    const base = g(work, ['rev-parse', 'HEAD']);
+    g(work, ['push', '-q', 'origin', 'HEAD:refs/heads/main']);
+    writeFileSync(join(work, 'next.txt'), 'next\n');
+    g(work, ['add', '-A']);
+    g(work, ['commit', '-qm', 'next']);
+    const next = g(work, ['rev-parse', 'HEAD']);
+    // Land next legitimately (origin/main now = next).
+    expect((await pushWithPrecondition(work, { source: 'HEAD', destination: 'main', expectedOldOid: base })).ok).toBe(true);
+
+    writeFileSync(join(work, 'third.txt'), 'third\n');
+    g(work, ['add', '-A']);
+    g(work, ['commit', '-qm', 'third']);
+    // Precondition still claims base, but origin advanced to next: CAS must fail.
+    const stale = await pushWithPrecondition(work, {
+      source: 'HEAD',
+      destination: 'main',
+      expectedOldOid: base,
+    });
+    expect(stale.ok).toBe(false);
+    expect(stale.reason).toBe('stale');
+    expect(g(origin, ['rev-parse', 'refs/heads/main'])).toBe(next);
+  });
+
+  it('creates a new remote branch under a null (must-be-absent) precondition', async () => {
+    const origin = makeBare();
+    const work = makeRepo();
+    g(work, ['remote', 'add', 'origin', origin]);
+    const base = g(work, ['rev-parse', 'HEAD']);
+    const created = await pushWithPrecondition(work, {
+      source: 'HEAD',
+      destination: 'promotion/task-1',
+      expectedOldOid: null,
+    });
+    expect(created.ok).toBe(true);
+    expect(g(origin, ['rev-parse', 'refs/heads/promotion/task-1'])).toBe(base);
+    // A second create with null precondition fails: the ref now exists. Push a
+    // new commit so the lease is actually exercised (an identical oid is a no-op).
+    writeFileSync(join(work, 'second.txt'), 'second\n');
+    g(work, ['add', '-A']);
+    g(work, ['commit', '-qm', 'second']);
+    const again = await pushWithPrecondition(work, {
+      source: 'HEAD',
+      destination: 'promotion/task-1',
+      expectedOldOid: null,
+    });
+    expect(again.ok).toBe(false);
+    expect(g(origin, ['rev-parse', 'refs/heads/promotion/task-1'])).toBe(base);
+  });
+});
+
+describe('logRange + commitChangedPaths (attribution inputs)', () => {
+  it('enumerates commits oldest-first with parents and author metadata', async () => {
+    const repo = makeRepo();
+    const base = g(repo, ['rev-parse', 'HEAD']);
+    const c1 = branchWith(repo, 'A', base, { 'a.txt': 'a\n' });
+    writeFileSync(join(repo, 'b.txt'), 'b\n');
+    g(repo, ['add', '-A']);
+    g(repo, ['commit', '-qm', 'second']);
+    const c2 = g(repo, ['rev-parse', 'HEAD']);
+
+    const commits = await logRange(repo, base, 'A');
+    expect(commits.map((c) => c.oid)).toEqual([c1, c2]);
+    expect(commits[0]?.subject).toBe('A');
+    expect(commits[0]?.parents).toEqual([base]);
+    expect(commits[1]?.parents).toEqual([c1]);
+    expect(commits[0]?.author_name).toBe('Test');
+    expect(commits[0]?.author_email).toBe('test@example.com');
+    expect(await commitChangedPaths(repo, c1)).toEqual(['a.txt']);
+    expect(await commitChangedPaths(repo, c2)).toEqual(['b.txt']);
+  });
+
+  it('returns an empty range when head equals base', async () => {
+    const repo = makeRepo();
+    const base = g(repo, ['rev-parse', 'HEAD']);
+    expect(await logRange(repo, base, 'HEAD')).toEqual([]);
   });
 });

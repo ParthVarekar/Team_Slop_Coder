@@ -441,3 +441,216 @@ export async function mergeTreeWriteTree(
     gateLatency.observe(performance.now() - started);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Merge-queue plumbing: commit-tree / fetch / CAS push / ref CAS / history
+// ---------------------------------------------------------------------------
+
+const WEFT_COMMITTER = { name: 'Weft Merge Queue', email: 'weft@localhost' };
+
+export interface CommitTreeOptions {
+  parents?: string[];
+  message: string;
+  authorName?: string | undefined;
+  authorEmail?: string | undefined;
+  committerName?: string | undefined;
+  committerEmail?: string | undefined;
+  binary?: string | undefined;
+}
+
+/**
+ * Create a commit object from an existing tree + parents without touching the
+ * index, HEAD, or working tree. The object is written to the store but is
+ * dangling until the caller update-ref's it; the queue executor materializes a
+ * validated speculative merge tree this way, then makes it durable via a ref.
+ */
+export async function commitTree(
+  repo: string,
+  tree: string,
+  options: CommitTreeOptions,
+): Promise<string> {
+  if (!OID_RE.test(tree)) throw new Error(`invalid tree oid: ${tree}`);
+  const env = {
+    GIT_AUTHOR_NAME: options.authorName ?? WEFT_COMMITTER.name,
+    GIT_AUTHOR_EMAIL: options.authorEmail ?? WEFT_COMMITTER.email,
+    GIT_COMMITTER_NAME: options.committerName ?? WEFT_COMMITTER.name,
+    GIT_COMMITTER_EMAIL: options.committerEmail ?? WEFT_COMMITTER.email,
+  };
+  const args = ['commit-tree', tree];
+  for (const parent of options.parents ?? []) {
+    if (!OID_RE.test(parent)) throw new Error(`invalid parent oid: ${parent}`);
+    args.push('-p', parent);
+  }
+  args.push('-m', options.message);
+  const oid = (await git(args, { cwd: repo, binary: options.binary, env })).trim();
+  if (!OID_RE.test(oid)) throw new Error(`commit-tree returned invalid oid: ${oid}`);
+  return oid;
+}
+
+export interface FetchOptions {
+  remote?: string | undefined;
+  refspec?: string | undefined;
+  prune?: boolean | undefined;
+  binary?: string | undefined;
+}
+
+/** Fetch a remote, updating remote-tracking refs only — never local HEAD/index. */
+export async function fetch(repo: string, options: FetchOptions = {}): Promise<void> {
+  const args = ['fetch', options.remote ?? 'origin'];
+  if (options.prune) args.push('--prune');
+  if (options.refspec) args.push(options.refspec);
+  await git(args, { cwd: repo, binary: options.binary });
+}
+
+export type PushFailureReason = 'stale' | 'rejected' | 'error';
+
+export interface PushPreconditionOptions {
+  /** Local commit/ref to push. */
+  source: string;
+  /** Remote branch (short name or full refs/heads/...). */
+  destination: string;
+  /** Expected current remote oid (CAS); null means the ref must not exist yet. */
+  expectedOldOid: string | null;
+  remote?: string | undefined;
+  binary?: string | undefined;
+}
+
+export interface PushResult {
+  ok: boolean;
+  reason?: PushFailureReason;
+  newOid?: string;
+  stderr?: string;
+}
+
+/**
+ * Push `source` to `remote/destination` under an old-OID precondition
+ * (--force-with-lease). The push lands only if the remote ref still equals
+ * expectedOldOid; if another writer advanced it, git rejects with "stale info"
+ * and nothing is overwritten. This is the queue's compare-and-swap against
+ * origin — a failover successor re-reads origin and can never clobber a merge
+ * the predecessor already landed.
+ */
+export async function pushWithPrecondition(
+  repo: string,
+  options: PushPreconditionOptions,
+): Promise<PushResult> {
+  const remote = options.remote ?? 'origin';
+  const destRef = options.destination.startsWith('refs/')
+    ? options.destination
+    : `refs/heads/${options.destination}`;
+  const expect = options.expectedOldOid ?? '';
+  const args = [
+    'push',
+    `--force-with-lease=${destRef}:${expect}`,
+    remote,
+    `${options.source}:${destRef}`,
+  ];
+  const opts = {
+    cwd: repo,
+    env: { ...process.env },
+    maxBuffer: 64 * 1024 * 1024,
+    windowsHide: true,
+  };
+  try {
+    await execFileAsync(options.binary ?? 'git', args, opts);
+    const newOid = await revParse(repo, options.source, options.binary);
+    return newOid ? { ok: true, newOid } : { ok: true };
+  } catch (err) {
+    const e = err as { stderr?: string };
+    const stderr = (e.stderr ?? '').trim();
+    const reason: PushFailureReason = /stale info/i.test(stderr)
+      ? 'stale'
+      : /rejected|non-fast-forward|fetch first|failed to push/i.test(stderr)
+        ? 'rejected'
+        : 'error';
+    return { ok: false, reason, stderr };
+  }
+}
+
+/**
+ * CAS update of a local ref. With oldOid a string, succeeds only if the ref
+ * currently equals it; with oldOid null, only if the ref is absent; with oldOid
+ * omitted, unconditional. Returns false when the precondition fails (lost race).
+ */
+export async function updateRef(
+  repo: string,
+  ref: string,
+  newOid: string,
+  oldOid?: string | null,
+  binary?: string,
+): Promise<boolean> {
+  if (!OID_RE.test(newOid)) throw new Error(`invalid new oid: ${newOid}`);
+  const args = ['update-ref', ref, newOid];
+  if (oldOid === null) args.push('');
+  else if (typeof oldOid === 'string') args.push(oldOid);
+  try {
+    await git(args, { cwd: repo, binary });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Parent oids of a commit (empty for a root commit). */
+export async function commitParents(repo: string, oid: string, binary?: string): Promise<string[]> {
+  const out = await git(['rev-list', '--parents', '-n', '1', oid], { cwd: repo, binary });
+  const parts = out.trim().split(/\s+/).filter((p) => p.length > 0);
+  return parts.slice(1);
+}
+
+export interface CommitInfo {
+  oid: string;
+  parents: string[];
+  subject: string;
+  author_name: string;
+  author_email: string;
+  authored_at: string;
+}
+
+/**
+ * Commits in `base..head` (oldest first) with parents + author metadata. Failure
+ * attribution enumerates the changes since the last healthy baseline with this.
+ */
+export async function logRange(
+  repo: string,
+  base: string,
+  head: string,
+  binary?: string,
+): Promise<CommitInfo[]> {
+  const format = '%H%x00%P%x00%an%x00%ae%x00%aI%x00%s%x1e';
+  const out = await git(['log', '--reverse', `--format=${format}`, `${base}..${head}`], {
+    cwd: repo,
+    binary,
+  });
+  const commits: CommitInfo[] = [];
+  for (const record of out.split('\x1e')) {
+    const trimmed = record.replace(/^\n+/, '');
+    if (trimmed.trim().length === 0) continue;
+    const fields = trimmed.split('\x00');
+    if (fields.length < 6) continue;
+    const oid = (fields[0] ?? '').trim();
+    if (!OID_RE.test(oid)) continue;
+    commits.push({
+      oid,
+      parents: (fields[1] ?? '').trim().split(/\s+/).filter((p) => p.length > 0),
+      author_name: fields[2] ?? '',
+      author_email: fields[3] ?? '',
+      authored_at: fields[4] ?? '',
+      subject: (fields[5] ?? '').trim(),
+    });
+  }
+  return commits;
+}
+
+/** Paths a single commit changed vs its first parent (root commit: all paths). */
+export async function commitChangedPaths(
+  repo: string,
+  oid: string,
+  binary?: string,
+): Promise<string[]> {
+  const out = await git(
+    ['diff-tree', '--root', '--no-commit-id', '--name-only', '-r', '-z', oid],
+    { cwd: repo, binary },
+  );
+  return out.split('\0').filter((p) => p.length > 0);
+}
