@@ -21,6 +21,7 @@ import { makeId, type Actor } from '@weft/protocol';
 import type { EventDraft } from './events.js';
 import type { EnqueueResult } from './pipeline.js';
 import type { RepoRecord, RepoRegistry } from './repos.js';
+import type { ValidationCache } from './validation-cache.js';
 
 const runsStarted = metrics.counter('weft_validation_runs_total', 'Validation runs started');
 const runsPassed = metrics.counter('weft_validation_runs_passed_total', 'Validation runs passed');
@@ -73,6 +74,7 @@ export interface ValidationRunRecord {
   finished_at: string | null;
   input_hash: string | null;
   independence: Independence;
+  cache_hit: boolean;
   checks: CheckEvidence[];
 }
 
@@ -99,6 +101,10 @@ export interface ValidationSupervisorOptions {
   emit: (draft: EventDraft) => EnqueueResult;
   binary?: string | undefined;
   logger?: Logger | undefined;
+  /** Optional result cache; when absent every run executes fresh. */
+  cache?: ValidationCache | undefined;
+  /** Toolchain identity for cache keying; defaults to node version + check commands. */
+  toolchainFingerprint?: string | undefined;
 }
 
 interface RunRow {
@@ -115,6 +121,7 @@ interface RunRow {
   finished_at: string | null;
   input_hash: string | null;
   independence: string;
+  cache_hit: number;
 }
 
 interface CheckRow {
@@ -126,6 +133,28 @@ interface CheckRow {
   log_digest: string | null;
   log_excerpt: string | null;
   selection: string | null;
+}
+
+interface RunContext {
+  repo: RepoRecord;
+  runId: string;
+  candidateOid: string;
+  tree: string | null;
+  taskId: string | undefined;
+  trigger: ValidationTrigger;
+  startedAt: string;
+  runnerDevice: string;
+  claimantDevice: string;
+  independence: Independence;
+  inputHash: string;
+}
+
+/** Default toolchain identity: node version + the exact check commands. */
+function defaultFingerprint(checks: ValidationConfig['checks']): string {
+  return createHash('sha256')
+    .update(JSON.stringify({ node: process.version, commands: checks.map((c) => [c.command, ...c.args]) }))
+    .digest('hex')
+    .slice(0, 32);
 }
 
 /** Counting semaphore; a released slot is transferred directly to the next waiter. */
@@ -248,15 +277,16 @@ export class ValidationSupervisor {
         }),
       )
       .digest('hex');
+    const fingerprint = this.options.toolchainFingerprint ?? defaultFingerprint(checks);
 
     this.db
       .prepare(
         `INSERT INTO validation_runs
            (run_id, repo_id, task_id, trigger, candidate_oid, tree_oid, runner_device_id,
-            claimant_device_id, state, started_at, input_hash, independence)
+            claimant_device_id, state, started_at, input_hash, toolchain_fingerprint, independence)
          VALUES
            (@run_id, @repo_id, @task_id, @trigger, @candidate_oid, @tree_oid, @runner_device_id,
-            @claimant_device_id, 'running', @started_at, @input_hash, @independence)`,
+            @claimant_device_id, 'running', @started_at, @input_hash, @fingerprint, @independence)`,
       )
       .run({
         run_id: runId,
@@ -269,19 +299,10 @@ export class ValidationSupervisor {
         claimant_device_id: claimantDevice,
         started_at: startedAt,
         input_hash: inputHash,
+        fingerprint,
         independence,
       });
     runsStarted.inc();
-
-    const path = join(this.options.worktreeRoot, 'validation', runId);
-    mkdirSync(dirname(path), { recursive: true });
-    await this.serialize(repo.repo_id, () =>
-      worktreeAddDetached(repo.root_path, path, candidateOid, {
-        lock: true,
-        lockReason: `weft:validation:${runId}`,
-        binary: this.binary,
-      }),
-    );
 
     this.emit(repo, runId, taskId, 'validation.started', {
       run_id: runId,
@@ -294,6 +315,34 @@ export class ValidationSupervisor {
       claimant_device_id: claimantDevice,
       independence,
     });
+
+    // Cache hit: reuse the prior passing evidence without re-executing any check.
+    // Queue-trigger runs always execute fresh (independence requires real work).
+    const cache = this.options.cache;
+    const cached =
+      cache && trigger !== 'queue'
+        ? cache.get({ inputHash, toolchainFingerprint: fingerprint })
+        : null;
+    if (cached) {
+      for (const ev of cached.checks) this.persistCheck(repo, runId, taskId, ev);
+      return this.finishRun(
+        { repo, runId, candidateOid, tree, taskId, trigger, startedAt, runnerDevice, claimantDevice, independence, inputHash },
+        'passed',
+        cached.checks,
+        true,
+        cached.expires_at,
+      );
+    }
+
+    const path = join(this.options.worktreeRoot, 'validation', runId);
+    mkdirSync(dirname(path), { recursive: true });
+    await this.serialize(repo.repo_id, () =>
+      worktreeAddDetached(repo.root_path, path, candidateOid, {
+        lock: true,
+        lockReason: `weft:validation:${runId}`,
+        binary: this.binary,
+      }),
+    );
 
     const evidence: CheckEvidence[] = [];
     let anyError = false;
@@ -331,47 +380,83 @@ export class ValidationSupervisor {
           truncated: result.truncated,
         };
         evidence.push(ev);
-        this.db
-          .prepare(
-            `INSERT INTO check_results
-               (validation_run_id, check_id, command_display, exit_code, duration_ms,
-                log_digest, log_excerpt, selection, newly_failing)
-             VALUES
-               (@run_id, @check_id, @command_display, @exit_code, @duration_ms,
-                @log_digest, @log_excerpt, @selection, 0)`,
-          )
-          .run({
-            run_id: runId,
-            check_id: check.check_id,
-            command_display: commandDisplay,
-            exit_code: exitCode,
-            duration_ms: durationMs,
-            log_digest: result.outputDigest,
-            log_excerpt: excerpt,
-            selection: check.selection,
-          });
-        this.emit(repo, runId, taskId, 'check.completed', {
-          run_id: runId,
-          check_id: check.check_id,
-          exit_code: exitCode ?? -1,
-          duration_ms: durationMs,
-          log_digest: result.outputDigest,
-          command_display: commandDisplay,
-          log_excerpt: excerpt,
-          selection: check.selection,
-          timed_out: result.timedOut,
-          truncated: result.truncated,
-        });
+        this.persistCheck(repo, runId, taskId, ev);
       }
     } finally {
       await this.cleanup(repo, path);
     }
 
     const state: ValidationRunState = anyError ? 'error' : anyFailed ? 'failed' : 'passed';
+    if (cache) {
+      if (state === 'passed' && tree) {
+        cache.put({
+          inputHash,
+          toolchainFingerprint: fingerprint,
+          repoId: repo.repo_id,
+          treeOid: tree,
+          state,
+          checks: evidence,
+        });
+      } else if (state !== 'passed') {
+        // A failure on an identical input distrusts any cached pass (flake quarantine).
+        cache.quarantine({ inputHash, toolchainFingerprint: fingerprint });
+      }
+    }
+    return this.finishRun(
+      { repo, runId, candidateOid, tree, taskId, trigger, startedAt, runnerDevice, claimantDevice, independence, inputHash },
+      state,
+      evidence,
+      false,
+      null,
+    );
+  }
+
+  private persistCheck(repo: RepoRecord, runId: string, taskId: string | undefined, ev: CheckEvidence): void {
+    this.db
+      .prepare(
+        `INSERT INTO check_results
+           (validation_run_id, check_id, command_display, exit_code, duration_ms,
+            log_digest, log_excerpt, selection, newly_failing)
+         VALUES
+           (@run_id, @check_id, @command_display, @exit_code, @duration_ms,
+            @log_digest, @log_excerpt, @selection, 0)`,
+      )
+      .run({
+        run_id: runId,
+        check_id: ev.check_id,
+        command_display: ev.command_display,
+        exit_code: ev.exit_code,
+        duration_ms: ev.duration_ms,
+        log_digest: ev.log_digest,
+        log_excerpt: ev.log_excerpt,
+        selection: ev.selection,
+      });
+    this.emit(repo, runId, taskId, 'check.completed', {
+      run_id: runId,
+      check_id: ev.check_id,
+      exit_code: ev.exit_code ?? -1,
+      duration_ms: ev.duration_ms,
+      log_digest: ev.log_digest,
+      command_display: ev.command_display,
+      log_excerpt: ev.log_excerpt,
+      selection: ev.selection,
+      timed_out: ev.timed_out,
+      truncated: ev.truncated,
+    });
+  }
+
+  private finishRun(
+    ctx: RunContext,
+    state: ValidationRunState,
+    evidence: CheckEvidence[],
+    cacheHit: boolean,
+    cacheExpiresAt: string | null,
+  ): ValidationRunRecord {
+    const { repo, runId, candidateOid, tree, taskId, trigger, startedAt, runnerDevice, claimantDevice, independence, inputHash } = ctx;
     const finishedAt = new Date().toISOString();
     this.db
-      .prepare('UPDATE validation_runs SET state = ?, finished_at = ? WHERE run_id = ?')
-      .run(state, finishedAt, runId);
+      .prepare('UPDATE validation_runs SET state = ?, finished_at = ?, cache_hit = ?, cache_expires_at = ? WHERE run_id = ?')
+      .run(state, finishedAt, cacheHit ? 1 : 0, cacheExpiresAt, runId);
     if (state === 'passed') runsPassed.inc();
     else if (state === 'failed') runsFailed.inc();
     else runsErrored.inc();
@@ -381,7 +466,7 @@ export class ValidationSupervisor {
       state,
       candidate_oid: candidateOid,
       input_hash: inputHash,
-      cache_hit: false,
+      cache_hit: cacheHit,
       checks: evidence.map((e) => ({
         check_id: e.check_id,
         exit_code: e.exit_code ?? -1,
@@ -393,7 +478,7 @@ export class ValidationSupervisor {
       independence,
     });
     this.options.logger?.info(
-      { runId, repoId: repo.repo_id, taskId, state, checks: evidence.length },
+      { runId, repoId: repo.repo_id, taskId, state, cacheHit, checks: evidence.length },
       'validation run finished',
     );
 
@@ -411,6 +496,7 @@ export class ValidationSupervisor {
       finished_at: finishedAt,
       input_hash: inputHash,
       independence,
+      cache_hit: cacheHit,
       checks: evidence,
     };
   }
@@ -475,6 +561,7 @@ export class ValidationSupervisor {
       finished_at: row.finished_at,
       input_hash: row.input_hash,
       independence: row.independence as Independence,
+      cache_hit: row.cache_hit !== 0,
       checks,
     };
   }

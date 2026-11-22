@@ -6,6 +6,7 @@ import { worktreesMigration } from './0004_worktrees.js';
 import { claimsMigration } from './0005_claims.js';
 import { symbolsMigration } from './0006_symbols.js';
 import { branchIndexMigration } from './0007_branch_index.js';
+import { validationCacheMigration } from './0008_validation_cache.js';
 
 /** Daemon-local SQLite migrations, applied in lexical order. */
 export const DAEMON_MIGRATIONS: Migration[] = [
@@ -16,4 +17,5 @@ export const DAEMON_MIGRATIONS: Migration[] = [
   claimsMigration,
   symbolsMigration,
   branchIndexMigration,
+  validationCacheMigration,
 ];
