@@ -654,3 +654,79 @@ export async function commitChangedPaths(
   );
   return out.split('\0').filter((p) => p.length > 0);
 }
+
+export interface RevertOptions {
+  /** Root under which the isolated revert worktree is created. */
+  worktreeRoot: string;
+  /** Commit to revert from (default HEAD); becomes the revert commit's parent. */
+  from?: string | undefined;
+  message?: string | undefined;
+  binary?: string | undefined;
+}
+
+export type RevertResult =
+  | { ok: true; revertOid: string; treeOid: string; revertedPaths: string[] }
+  | { ok: false; reason: 'conflict' | 'error'; conflictedPaths: string[]; stderr?: string };
+
+/**
+ * Safely revert a single commit in an isolated, locked detached worktree. Only
+ * the inverse of the culprit's diff is applied, so work landed by later commits
+ * is preserved. The revert commit is materialized with commit-tree (plumbing —
+ * no hooks, no index/HEAD mutation) and left dangling for the caller to land via
+ * the queue or a ref; the user's HEAD, branch, and working tree never change. A
+ * revert that would conflict with later work is reported, never forced — we do
+ * not silently discard another developer's changes to make a revert apply.
+ */
+export async function revertCommit(
+  repo: string,
+  oid: string,
+  options: RevertOptions,
+): Promise<RevertResult> {
+  if (!OID_RE.test(oid)) throw new Error(`invalid oid: ${oid}`);
+  const fromRef = options.from ?? 'HEAD';
+  const fromOid = await revParse(repo, fromRef, options.binary);
+  if (!fromOid) {
+    return { ok: false, reason: 'error', conflictedPaths: [], stderr: `cannot resolve ${fromRef}` };
+  }
+  const path = join(options.worktreeRoot, `revert-${randomUUID()}`);
+  await worktreeAddDetached(repo, path, fromOid, {
+    lock: true,
+    lockReason: `weft:revert:${oid.slice(0, 12)}`,
+    binary: options.binary,
+  });
+  try {
+    try {
+      await git(['revert', '--no-commit', oid], { cwd: path, binary: options.binary });
+    } catch (err) {
+      const e = err as { stderr?: string };
+      const conflicted = (
+        await git(['diff', '--name-only', '--diff-filter=U', '-z'], {
+          cwd: path,
+          binary: options.binary,
+        }).catch(() => '')
+      )
+        .split('\0')
+        .filter((p) => p.length > 0);
+      await git(['revert', '--abort'], { cwd: path, binary: options.binary }).catch(() => {});
+      return {
+        ok: false,
+        reason: 'conflict',
+        conflictedPaths: conflicted,
+        stderr: (e.stderr ?? '').trim(),
+      };
+    }
+    const treeOid = (await git(['write-tree'], { cwd: path, binary: options.binary })).trim();
+    const revertedPaths = await commitChangedPaths(repo, oid, options.binary);
+    const message = options.message ?? `Revert "${oid.slice(0, 12)}"`;
+    const revertOid = await commitTree(repo, treeOid, {
+      parents: [fromOid],
+      message,
+      binary: options.binary,
+    });
+    return { ok: true, revertOid, treeOid, revertedPaths };
+  } finally {
+    await worktreeUnlock(repo, path, options.binary).catch(() => {});
+    await worktreeRemove(repo, path, { force: true, binary: options.binary }).catch(() => {});
+    await worktreePrune(repo, options.binary).catch(() => {});
+  }
+}

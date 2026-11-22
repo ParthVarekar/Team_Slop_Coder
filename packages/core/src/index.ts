@@ -3,6 +3,7 @@ export * from './metrics.js';
 export * from './logging.js';
 export * from './git.js';
 export * from './git-plumbing.js';
+export * from './attribution.js';
 export * from './exec.js';
 export * from './redaction.js';
 export * from './db/sqlite.js';
