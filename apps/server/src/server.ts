@@ -5,6 +5,7 @@ import {
   PROTOCOL_VERSION,
   makeId,
   TaskStateSchema,
+  MergeStateSchema,
   ConflictStateSchema,
   ConflictSeveritySchema,
   ConflictKindSchema,
@@ -45,6 +46,20 @@ import {
   ReleaseReservationSchema,
 } from './reservations-service.js';
 import { ValidationService } from './validation-service.js';
+import {
+  MergeQueueService,
+  MergeQueueError,
+  EnqueueMergeSchema,
+  SpeculativeTreeSchema,
+} from './merge-queue-service.js';
+import {
+  HealthService,
+  HealthError,
+  EstablishBaselineSchema,
+  RecordRegressionSchema,
+  ConfirmRegressionSchema,
+  SuspectChangeSchema,
+} from './health-service.js';
 import {
   NotificationService,
   NotificationError,
@@ -165,6 +180,62 @@ const NotificationStateBody = z.object({
   state: NotificationStateSchema,
 });
 const MembersQuery = z.object({ projectId: z.string().min(1).optional() });
+const ProjectBody = z.object({ projectId: z.string().min(1).optional() });
+const EnqueueMergeBody = EnqueueMergeSchema.extend({ projectId: z.string().min(1).optional() });
+const MergeEntriesQuery = z.object({
+  projectId: z.string().min(1).optional(),
+  repoId: z.string().min(1).optional(),
+  state: MergeStateSchema.optional(),
+  limit: z.coerce.number().int().min(1).max(1000).default(200),
+});
+const LeaseAcquireBody = z.object({
+  projectId: z.string().min(1).optional(),
+  repo_id: z.string().min(1),
+  device_id: z.string().min(1),
+  ttl_ms: z.number().int().min(1).max(3_600_000).optional(),
+});
+const LeaseReleaseBody = z.object({
+  projectId: z.string().min(1).optional(),
+  repo_id: z.string().min(1),
+  device_id: z.string().min(1),
+});
+const LeaseQuery = z.object({
+  projectId: z.string().min(1).optional(),
+  repoId: z.string().min(1),
+});
+const ClaimNextBody = z.object({
+  projectId: z.string().min(1).optional(),
+  repo_id: z.string().min(1),
+  device_id: z.string().min(1),
+  lease_epoch: z.number().int().nonnegative(),
+});
+const ExecutorBody = z.object({
+  projectId: z.string().min(1).optional(),
+  device_id: z.string().min(1),
+  lease_epoch: z.number().int().nonnegative(),
+});
+const SpeculativeTreeBody = SpeculativeTreeSchema.extend(ExecutorBody.shape);
+const AttachValidationBody = ExecutorBody.extend({ validation_run_id: z.string().min(1) });
+const AdvanceBody = ExecutorBody.extend({ merged_oid: z.string().min(1) });
+const EjectBody = ExecutorBody.extend({ reason: z.string().min(1).max(2000) });
+const EstablishBaselineBody = EstablishBaselineSchema.extend({ projectId: z.string().min(1).optional() });
+const RecordRegressionBody = RecordRegressionSchema.extend({ projectId: z.string().min(1).optional() });
+const AttributeRegressionBody = z.object({
+  projectId: z.string().min(1).optional(),
+  changes: z.array(SuspectChangeSchema).min(1),
+});
+const ConfirmRegressionBody = ConfirmRegressionSchema.extend({ projectId: z.string().min(1).optional() });
+const HealthListQuery = z.object({
+  projectId: z.string().min(1).optional(),
+  repoId: z.string().min(1).optional(),
+  state: z.string().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(1000).default(200),
+});
+const LatestBaselineQuery = z.object({
+  projectId: z.string().min(1).optional(),
+  repoId: z.string().min(1),
+  branch: z.string().min(1),
+});
 
 export interface TeamServer {
   readonly config: ServerConfig;
@@ -220,6 +291,8 @@ export async function createServer(
   const notifications = new NotificationService(db.pool, logger);
   const ingest = new IngestService(db.pool, logger, conflicts, validation, notifications);
   const tasks = new TaskService(db.pool, logger);
+  const mergeQueue = new MergeQueueService(db.pool, serverDeviceId, logger);
+  const health = new HealthService(db.pool, serverDeviceId, logger);
   const hub = new StreamHub();
   const activeStreams = new Set<() => void>();
 
@@ -253,6 +326,28 @@ export async function createServer(
     }
     if (err instanceof NotificationError) {
       const status = err.code === 'not_found' ? 404 : 400;
+      return reply.code(status).send({ error: err.code, message: err.message });
+    }
+    if (err instanceof MergeQueueError) {
+      const status =
+        err.code === 'not_found'
+          ? 404
+          : err.code === 'forbidden'
+            ? 403
+            : err.code === 'lease_required'
+              ? 409
+              : err.code === 'invalid_transition' || err.code === 'evidence_required'
+                ? 422
+                : 400;
+      return reply.code(status).send({ error: err.code, message: err.message });
+    }
+    if (err instanceof HealthError) {
+      const status =
+        err.code === 'not_found'
+          ? 404
+          : err.code === 'invalid_transition' || err.code === 'evidence_required'
+            ? 422
+            : 400;
       return reply.code(status).send({ error: err.code, message: err.message });
     }
     const e = err as { statusCode?: number; message?: string };
@@ -768,6 +863,283 @@ export async function createServer(
     const run = await validation.getRun(runId, g.projectId);
     if (!run) return reply.code(404).send({ error: 'not_found', message: `validation run ${runId} not found` });
     return reply.send({ run });
+  });
+
+  // --- Merge queue (server-authoritative lease election + never-merge-unvalidated) ---
+  // The server records queue/lease state and gates the merge on independent
+  // validation evidence; the executor daemon does the actual git CAS push.
+  app.post('/v1/merge/lease', async (req, reply) => {
+    const body = LeaseAcquireBody.safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: 'validation', message: body.error.message });
+    const g = await guard(req, reply, 'mutate', body.data.projectId);
+    if (!g) return;
+    if (!g.projectId) return reply.code(400).send({ error: 'validation', message: 'projectId is required' });
+    const result = await mergeQueue.acquireExecutorLease(
+      g.projectId, body.data.repo_id, body.data.device_id, originOf(g.ctx), body.data.ttl_ms,
+    );
+    hub.notify(g.projectId);
+    const status = result.status === 'denied' ? 409 : result.status === 'acquired' ? 201 : 200;
+    return reply.code(status).send(result);
+  });
+
+  app.post('/v1/merge/lease/renew', async (req, reply) => {
+    const body = LeaseAcquireBody.safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: 'validation', message: body.error.message });
+    const g = await guard(req, reply, 'mutate', body.data.projectId);
+    if (!g) return;
+    if (!g.projectId) return reply.code(400).send({ error: 'validation', message: 'projectId is required' });
+    const lease = await mergeQueue.renewExecutorLease(
+      g.projectId, body.data.repo_id, body.data.device_id, originOf(g.ctx), body.data.ttl_ms,
+    );
+    hub.notify(g.projectId);
+    return reply.send({ lease });
+  });
+
+  app.post('/v1/merge/lease/release', async (req, reply) => {
+    const body = LeaseReleaseBody.safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: 'validation', message: body.error.message });
+    const g = await guard(req, reply, 'mutate', body.data.projectId);
+    if (!g) return;
+    if (!g.projectId) return reply.code(400).send({ error: 'validation', message: 'projectId is required' });
+    const lease = await mergeQueue.releaseExecutorLease(
+      g.projectId, body.data.repo_id, body.data.device_id, originOf(g.ctx),
+    );
+    hub.notify(g.projectId);
+    return reply.send({ lease });
+  });
+
+  app.get('/v1/merge/lease', async (req, reply) => {
+    const q = LeaseQuery.safeParse(req.query);
+    if (!q.success) return reply.code(400).send({ error: 'validation', message: q.error.message });
+    const g = await guard(req, reply, 'read', q.data.projectId);
+    if (!g) return;
+    if (!g.projectId) return reply.code(400).send({ error: 'validation', message: 'projectId is required' });
+    const lease = await mergeQueue.getExecutorLease(g.projectId, q.data.repoId);
+    return reply.send({ lease: lease ?? null });
+  });
+
+  app.post('/v1/merge/enqueue', async (req, reply) => {
+    const body = EnqueueMergeBody.safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: 'validation', message: body.error.message });
+    const g = await guard(req, reply, 'mutate', body.data.projectId);
+    if (!g) return;
+    if (!g.projectId) return reply.code(400).send({ error: 'validation', message: 'projectId is required' });
+    const entry = await mergeQueue.enqueue(g.projectId, body.data, originOf(g.ctx));
+    hub.notify(g.projectId);
+    return reply.code(201).send({ entry });
+  });
+
+  app.get('/v1/merge/entries', async (req, reply) => {
+    const q = MergeEntriesQuery.safeParse(req.query);
+    if (!q.success) return reply.code(400).send({ error: 'validation', message: q.error.message });
+    const g = await guard(req, reply, 'read', q.data.projectId);
+    if (!g) return;
+    if (!g.projectId) return reply.code(400).send({ error: 'validation', message: 'projectId is required' });
+    const entries = await mergeQueue.list(g.projectId, {
+      ...(q.data.repoId ? { repoId: q.data.repoId } : {}),
+      ...(q.data.state ? { state: q.data.state } : {}),
+      limit: q.data.limit,
+    });
+    return reply.send({ entries });
+  });
+
+  app.post('/v1/merge/claim', async (req, reply) => {
+    const body = ClaimNextBody.safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: 'validation', message: body.error.message });
+    const g = await guard(req, reply, 'mutate', body.data.projectId);
+    if (!g) return;
+    if (!g.projectId) return reply.code(400).send({ error: 'validation', message: 'projectId is required' });
+    const entry = await mergeQueue.claimNext(
+      g.projectId, body.data.repo_id, body.data.device_id, body.data.lease_epoch, originOf(g.ctx),
+    );
+    if (entry) hub.notify(g.projectId);
+    return reply.send({ entry });
+  });
+
+  app.get('/v1/merge/entries/:id', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const q = req.query as { projectId?: string };
+    const g = await guard(req, reply, 'read', q.projectId);
+    if (!g) return;
+    if (!g.projectId) return reply.code(400).send({ error: 'validation', message: 'projectId is required' });
+    const entry = await mergeQueue.get(g.projectId, id);
+    if (!entry) return reply.code(404).send({ error: 'not_found', message: `merge entry ${id} not found` });
+    return reply.send({ entry });
+  });
+
+  app.post('/v1/merge/entries/:id/speculative-tree', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = SpeculativeTreeBody.safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: 'validation', message: body.error.message });
+    const g = await guard(req, reply, 'mutate', body.data.projectId);
+    if (!g) return;
+    if (!g.projectId) return reply.code(400).send({ error: 'validation', message: 'projectId is required' });
+    const entry = await mergeQueue.recordSpeculativeTree(
+      g.projectId, id, body.data, body.data.device_id, body.data.lease_epoch, originOf(g.ctx),
+    );
+    hub.notify(g.projectId);
+    return reply.send({ entry });
+  });
+
+  app.post('/v1/merge/entries/:id/attach-validation', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = AttachValidationBody.safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: 'validation', message: body.error.message });
+    const g = await guard(req, reply, 'mutate', body.data.projectId);
+    if (!g) return;
+    if (!g.projectId) return reply.code(400).send({ error: 'validation', message: 'projectId is required' });
+    const entry = await mergeQueue.attachValidation(
+      g.projectId, id, body.data.validation_run_id, body.data.device_id, body.data.lease_epoch, originOf(g.ctx),
+    );
+    hub.notify(g.projectId);
+    return reply.send({ entry });
+  });
+
+  app.post('/v1/merge/entries/:id/advance', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = AdvanceBody.safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: 'validation', message: body.error.message });
+    const g = await guard(req, reply, 'mutate', body.data.projectId);
+    if (!g) return;
+    if (!g.projectId) return reply.code(400).send({ error: 'validation', message: 'projectId is required' });
+    const entry = await mergeQueue.advance(
+      g.projectId, id, body.data.merged_oid, body.data.device_id, body.data.lease_epoch, originOf(g.ctx),
+    );
+    hub.notify(g.projectId);
+    return reply.send({ entry });
+  });
+
+  app.post('/v1/merge/entries/:id/eject', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = EjectBody.safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: 'validation', message: body.error.message });
+    const g = await guard(req, reply, 'mutate', body.data.projectId);
+    if (!g) return;
+    if (!g.projectId) return reply.code(400).send({ error: 'validation', message: 'projectId is required' });
+    const entry = await mergeQueue.eject(
+      g.projectId, id, body.data.reason, body.data.device_id, body.data.lease_epoch, originOf(g.ctx),
+    );
+    hub.notify(g.projectId);
+    return reply.send({ entry });
+  });
+
+  app.post('/v1/merge/entries/:id/requeue', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = ProjectBody.safeParse(req.body ?? {});
+    if (!body.success) return reply.code(400).send({ error: 'validation', message: body.error.message });
+    const g = await guard(req, reply, 'mutate', body.data.projectId);
+    if (!g) return;
+    if (!g.projectId) return reply.code(400).send({ error: 'validation', message: 'projectId is required' });
+    const entry = await mergeQueue.requeue(g.projectId, id, originOf(g.ctx));
+    hub.notify(g.projectId);
+    return reply.send({ entry });
+  });
+
+  // --- Repo health (baselines + regression attribution; server materializes evidence) ---
+  app.post('/v1/health/baselines', async (req, reply) => {
+    const body = EstablishBaselineBody.safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: 'validation', message: body.error.message });
+    const g = await guard(req, reply, 'mutate', body.data.projectId);
+    if (!g) return;
+    if (!g.projectId) return reply.code(400).send({ error: 'validation', message: 'projectId is required' });
+    const baseline = await health.establishBaseline(g.projectId, body.data, originOf(g.ctx));
+    hub.notify(g.projectId);
+    return reply.code(201).send({ baseline });
+  });
+
+  app.get('/v1/health/baselines', async (req, reply) => {
+    const q = HealthListQuery.safeParse(req.query);
+    if (!q.success) return reply.code(400).send({ error: 'validation', message: q.error.message });
+    const g = await guard(req, reply, 'read', q.data.projectId);
+    if (!g) return;
+    if (!g.projectId) return reply.code(400).send({ error: 'validation', message: 'projectId is required' });
+    const baselines = await health.listBaselines(g.projectId, {
+      ...(q.data.repoId ? { repoId: q.data.repoId } : {}),
+      ...(q.data.state ? { state: q.data.state } : {}),
+      limit: q.data.limit,
+    });
+    return reply.send({ baselines });
+  });
+
+  app.get('/v1/health/baselines/latest', async (req, reply) => {
+    const q = LatestBaselineQuery.safeParse(req.query);
+    if (!q.success) return reply.code(400).send({ error: 'validation', message: q.error.message });
+    const g = await guard(req, reply, 'read', q.data.projectId);
+    if (!g) return;
+    if (!g.projectId) return reply.code(400).send({ error: 'validation', message: 'projectId is required' });
+    const baseline = await health.latestBaseline(g.projectId, q.data.repoId, q.data.branch);
+    return reply.send({ baseline: baseline ?? null });
+  });
+
+  app.get('/v1/health/baselines/:id', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const q = req.query as { projectId?: string };
+    const g = await guard(req, reply, 'read', q.projectId);
+    if (!g) return;
+    if (!g.projectId) return reply.code(400).send({ error: 'validation', message: 'projectId is required' });
+    const baseline = await health.getBaseline(g.projectId, id);
+    if (!baseline) return reply.code(404).send({ error: 'not_found', message: `baseline ${id} not found` });
+    return reply.send({ baseline });
+  });
+
+  app.post('/v1/health/regressions', async (req, reply) => {
+    const body = RecordRegressionBody.safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: 'validation', message: body.error.message });
+    const g = await guard(req, reply, 'mutate', body.data.projectId);
+    if (!g) return;
+    if (!g.projectId) return reply.code(400).send({ error: 'validation', message: 'projectId is required' });
+    const regression = await health.recordRegression(g.projectId, body.data, originOf(g.ctx));
+    hub.notify(g.projectId);
+    return reply.code(201).send({ regression });
+  });
+
+  app.get('/v1/health/regressions', async (req, reply) => {
+    const q = HealthListQuery.safeParse(req.query);
+    if (!q.success) return reply.code(400).send({ error: 'validation', message: q.error.message });
+    const g = await guard(req, reply, 'read', q.data.projectId);
+    if (!g) return;
+    if (!g.projectId) return reply.code(400).send({ error: 'validation', message: 'projectId is required' });
+    const regressions = await health.listRegressions(g.projectId, {
+      ...(q.data.repoId ? { repoId: q.data.repoId } : {}),
+      ...(q.data.state ? { state: q.data.state } : {}),
+      limit: q.data.limit,
+    });
+    return reply.send({ regressions });
+  });
+
+  app.get('/v1/health/regressions/:id', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const q = req.query as { projectId?: string };
+    const g = await guard(req, reply, 'read', q.projectId);
+    if (!g) return;
+    if (!g.projectId) return reply.code(400).send({ error: 'validation', message: 'projectId is required' });
+    const regression = await health.getRegression(g.projectId, id);
+    if (!regression) return reply.code(404).send({ error: 'not_found', message: `regression ${id} not found` });
+    return reply.send({ regression });
+  });
+
+  app.post('/v1/health/regressions/:id/attribute', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = AttributeRegressionBody.safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: 'validation', message: body.error.message });
+    const g = await guard(req, reply, 'mutate', body.data.projectId);
+    if (!g) return;
+    if (!g.projectId) return reply.code(400).send({ error: 'validation', message: 'projectId is required' });
+    const suspects = await health.attributeRegression(g.projectId, id, body.data.changes, originOf(g.ctx));
+    hub.notify(g.projectId);
+    return reply.send({ suspects });
+  });
+
+  app.post('/v1/health/regressions/:id/confirm', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = ConfirmRegressionBody.safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: 'validation', message: body.error.message });
+    const g = await guard(req, reply, 'mutate', body.data.projectId);
+    if (!g) return;
+    if (!g.projectId) return reply.code(400).send({ error: 'validation', message: 'projectId is required' });
+    const regression = await health.confirmRegression(g.projectId, id, body.data, originOf(g.ctx));
+    hub.notify(g.projectId);
+    return reply.send({ regression });
   });
 
   // --- Inbox / triage (read scope queries; mutate scope triages your own cards) ---

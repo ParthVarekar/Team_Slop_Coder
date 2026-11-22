@@ -23,6 +23,9 @@ import { OverlapError } from './overlap.js';
 import { ResolverError } from './resolver.js';
 import { ModuleGraphError, dependentsOf } from './module-graph.js';
 import { ValidationRunError } from './validation.js';
+import { AttributionError } from './attribution.js';
+import { MergeExecutorError } from './merge-executor.js';
+import { evaluateContractGates, type ContractGateConfig } from './contract-gates.js';
 import { draftEvent } from './events.js';
 import { CoordinationRpcError } from './coordination-rpc.js';
 import type { StoredLocalEvent } from './store.js';
@@ -965,6 +968,156 @@ export function createApiServer(daemon: Daemon, options: ApiServerOptions = {}):
     const run = daemon.validation.getRun(runId);
     if (!run) return reply.code(404).send({ error: 'not_found' });
     return { run };
+  });
+
+  // --- M4: test impact analysis, contract gates, attribution, merge queue ---
+  const AffectedTestsBody = z.object({
+    changed_paths: z.array(z.string().min(1)).min(1),
+    path: z.string().min(1).optional(),
+    exclude: z.string().min(1).optional(),
+  });
+  app.post('/v1/repos/:id/affected-tests', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const parsed = AffectedTestsBody.safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: 'validation', message: parsed.error.message });
+    try {
+      const tests = await daemon.tia.affectedTests(id, parsed.data.changed_paths, {
+        ...(parsed.data.path ? { path: parsed.data.path } : {}),
+        ...(parsed.data.exclude ? { exclude: parsed.data.exclude } : {}),
+      });
+      return reply.send({ repo_id: id, changed_paths: parsed.data.changed_paths, affected_tests: tests });
+    } catch (err) {
+      if (err instanceof ModuleGraphError)
+        return reply.code(err.code === 'not_found' ? 404 : 500).send({ error: err.code, message: err.message });
+      throw err;
+    }
+  });
+
+  const ContractGatesBody = z.object({
+    gates: z.array(z.object({
+      gate_id: z.string().min(1),
+      tool: z.enum(['oasdiff', 'buf', 'squawk', 'prisma', 'custom']),
+      command: z.string().min(1),
+      args: z.array(z.string()).optional(),
+      blocking: z.boolean().optional(),
+      timeoutMs: z.number().int().positive().optional(),
+    })).min(1),
+  });
+  app.post('/v1/repos/:id/contract-gates', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const parsed = ContractGatesBody.safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: 'validation', message: parsed.error.message });
+    const repo = daemon.repos.get(id);
+    if (!repo) return reply.code(404).send({ error: 'not_found', message: `repo ${id} not found` });
+    const gates: ContractGateConfig[] = parsed.data.gates.map((gate) => ({
+      gate_id: gate.gate_id,
+      tool: gate.tool,
+      command: gate.command,
+      ...(gate.args ? { args: gate.args } : {}),
+      ...(gate.blocking !== undefined ? { blocking: gate.blocking } : {}),
+      ...(gate.timeoutMs !== undefined ? { timeoutMs: gate.timeoutMs } : {}),
+    }));
+    const results = await daemon.contractGates.run(gates, repo.root_path);
+    return reply.send({ repo_id: id, results, ...evaluateContractGates(results) });
+  });
+
+  const AttributeBody = z.object({
+    baseline_oid: z.string().min(1),
+    head: z.string().min(1).optional(),
+    failing_checks: z.array(z.object({ check_id: z.string().min(1), paths: z.array(z.string()) })).min(1),
+  });
+  app.post('/v1/repos/:id/attribution', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const parsed = AttributeBody.safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: 'validation', message: parsed.error.message });
+    try {
+      const suspects = await daemon.attribution.attribute(id, {
+        baselineOid: parsed.data.baseline_oid,
+        ...(parsed.data.head ? { head: parsed.data.head } : {}),
+        failingChecks: parsed.data.failing_checks,
+      });
+      return reply.send({ repo_id: id, suspects });
+    } catch (err) {
+      if (err instanceof AttributionError)
+        return reply.code(err.code === 'not_found' ? 404 : 500).send({ error: err.code, message: err.message });
+      throw err;
+    }
+  });
+
+  const RevertTestBody = z.object({
+    suspect_oid: z.string().min(1),
+    head: z.string().min(1).optional(),
+  });
+  app.post('/v1/repos/:id/revert-test', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const parsed = RevertTestBody.safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: 'validation', message: parsed.error.message });
+    try {
+      const result = await daemon.attribution.revertTest(id, parsed.data.suspect_oid, parsed.data.head);
+      return reply.send({ repo_id: id, ...result });
+    } catch (err) {
+      if (err instanceof AttributionError)
+        return reply.code(err.code === 'not_found' ? 404 : 500).send({ error: err.code, message: err.message });
+      throw err;
+    }
+  });
+
+  app.post('/v1/repos/:id/merge/tick', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!daemon.mergeExecutor)
+      return reply.code(409).send({ error: 'solo_mode', message: 'merge executor requires team mode' });
+    try {
+      return reply.send(await daemon.mergeExecutor.tick(id));
+    } catch (err) {
+      if (err instanceof MergeExecutorError)
+        return reply.code(err.code === 'not_found' ? 404 : 500).send({ error: err.code, message: err.message });
+      if (err instanceof CoordinationRpcError)
+        return reply.code(err.status).send({ error: err.code, message: err.message });
+      throw err;
+    }
+  });
+
+  const EnqueueMergeBody = z.object({
+    task_id: z.string().min(1),
+    branch: z.string().min(1),
+    candidate_oid: z.string().min(1).optional(),
+    target_branch: z.string().min(1).optional(),
+    claimant_device_id: z.string().min(1).optional(),
+  });
+  app.post('/v1/repos/:id/merge/enqueue', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!daemon.rpc) return reply.code(409).send({ error: 'solo_mode', message: 'merge queue requires team mode' });
+    const parsed = EnqueueMergeBody.safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: 'validation', message: parsed.error.message });
+    try {
+      const entry = await daemon.rpc.enqueue({
+        repo_id: id,
+        task_id: parsed.data.task_id,
+        branch: parsed.data.branch,
+        ...(parsed.data.candidate_oid ? { candidate_oid: parsed.data.candidate_oid } : {}),
+        ...(parsed.data.target_branch ? { target_branch: parsed.data.target_branch } : {}),
+        ...(parsed.data.claimant_device_id ? { claimant_device_id: parsed.data.claimant_device_id } : {}),
+      });
+      return reply.code(201).send({ entry });
+    } catch (err) {
+      if (err instanceof CoordinationRpcError)
+        return reply.code(err.status).send({ error: err.code, message: err.message });
+      throw err;
+    }
+  });
+
+  app.get('/v1/repos/:id/merge/entries', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!daemon.rpc) return reply.code(409).send({ error: 'solo_mode', message: 'merge queue requires team mode' });
+    const q = req.query as { state?: string };
+    try {
+      const entries = await daemon.rpc.listEntries({ repoId: id, ...(q.state ? { state: q.state } : {}) });
+      return reply.send({ entries });
+    } catch (err) {
+      if (err instanceof CoordinationRpcError)
+        return reply.code(err.status).send({ error: err.code, message: err.message });
+      throw err;
+    }
   });
 
   return {

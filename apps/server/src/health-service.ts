@@ -117,7 +117,7 @@ const FailingCheckSchema = z.object({
   check_id: z.string().min(1),
   paths: z.array(z.string()),
 });
-const SuspectChangeSchema = z.object({
+export const SuspectChangeSchema = z.object({
   oid: z.string().min(1),
   subject: z.string(),
   author_name: z.string(),

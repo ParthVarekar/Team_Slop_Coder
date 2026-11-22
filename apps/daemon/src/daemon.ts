@@ -20,6 +20,11 @@ import { Watcher } from './watcher.js';
 import { WorktreeManager } from './worktrees.js';
 import { ConflictDetector } from './conflicts.js';
 import { ValidationSupervisor } from './validation.js';
+import { ValidationCache } from './validation-cache.js';
+import { MergeExecutor } from './merge-executor.js';
+import { AttributionEngine } from './attribution.js';
+import { TiaSelector } from './tia.js';
+import { ContractGateRunner } from './contract-gates.js';
 import { OutboxShipper } from './shipper.js';
 import { CoordinationClient } from './coordination.js';
 import { EnforcementCache } from './enforcement.js';
@@ -62,6 +67,12 @@ export class Daemon {
   readonly worktrees: WorktreeManager;
   readonly conflicts: ConflictDetector;
   readonly validation: ValidationSupervisor;
+  readonly validationCache: ValidationCache;
+  readonly attribution: AttributionEngine;
+  readonly tia: TiaSelector;
+  readonly contractGates: ContractGateRunner;
+  /** Lease-elected merge executor; team mode only (needs the server queue RPC). */
+  readonly mergeExecutor: MergeExecutor | null = null;
   readonly source: EventSource;
   readonly actor: Actor;
   /** Team-mode sync: null in solo mode or when no server url/token is configured. */
@@ -157,6 +168,7 @@ export class Daemon {
       logger: this.logger,
       emit: (draft) => this.pipeline.enqueue(draftEvent(this.source, draft)),
     });
+    this.validationCache = new ValidationCache(this.store.db);
     this.validation = new ValidationSupervisor(this.store.db, {
       deviceId: this.identity.device_id,
       projectId: this.identity.project_id,
@@ -164,10 +176,20 @@ export class Daemon {
       registry: this.repos,
       actor: this.actor,
       validation: this.config.validation,
+      cache: this.validationCache,
       binary: this.config.git.binary,
       logger: this.logger,
       emit: (draft) => this.pipeline.enqueue(draftEvent(this.source, draft)),
     });
+    this.attribution = new AttributionEngine({
+      registry: this.repos,
+      validation: this.validation,
+      worktreeRoot: join(this.config.dataDir, 'worktrees'),
+      binary: this.config.git.binary,
+      logger: this.logger,
+    });
+    this.tia = new TiaSelector({ registry: this.repos, graph: this.moduleGraph });
+    this.contractGates = new ContractGateRunner({ logger: this.logger });
 
     const { url, token } = this.config.server;
     if (this.config.mode === 'team' && url && token) {
@@ -207,6 +229,14 @@ export class Daemon {
         baseUrl: url,
         token,
         projectId: this.identity.project_id,
+        logger: this.logger,
+      });
+      this.mergeExecutor = new MergeExecutor({
+        deviceId: this.identity.device_id,
+        registry: this.repos,
+        client: this.rpc,
+        validation: this.validation,
+        binary: this.config.git.binary,
         logger: this.logger,
       });
       this.coordination = new CoordinationClient({
