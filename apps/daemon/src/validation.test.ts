@@ -261,6 +261,38 @@ describe('ValidationSupervisor evidence', () => {
   });
 });
 
+describe('ValidationSupervisor cross-device independence', () => {
+  it('labels a run independent when the claimant device differs from the runner', async () => {
+    const { registry, supervisor, deviceId, captured } = harness();
+    const repo = await registry.register(makeRepo());
+    const claimant = makeId('device');
+    const run = await supervisor.run(repo.repo_id, { trigger: 'queue', claimantDeviceId: claimant });
+    expect(run.independence).toBe('independent');
+    expect(run.runner_device_id).toBe(deviceId);
+    expect(run.claimant_device_id).toBe(claimant);
+    expect(supervisor.getRun(run.run_id)?.independence).toBe('independent');
+    const started = captured.find((e) => e.type === 'validation.started');
+    expect(started?.payload.independence).toBe('independent');
+    expect(started?.payload.claimant_device_id).toBe(claimant);
+  });
+
+  it('labels a run self when the claimant device equals the runner', async () => {
+    const { registry, supervisor, deviceId } = harness();
+    const repo = await registry.register(makeRepo());
+    const run = await supervisor.run(repo.repo_id, { claimantDeviceId: deviceId });
+    expect(run.independence).toBe('self');
+    expect(run.claimant_device_id).toBe(deviceId);
+  });
+
+  it('defaults to self when no claimant device is supplied', async () => {
+    const { registry, supervisor, deviceId } = harness();
+    const repo = await registry.register(makeRepo());
+    const run = await supervisor.run(repo.repo_id);
+    expect(run.independence).toBe('self');
+    expect(run.claimant_device_id).toBe(deviceId);
+  });
+});
+
 describe('ValidationSupervisor input guards', () => {
   it('rejects an unknown repo with not_found', async () => {
     const { supervisor } = harness();

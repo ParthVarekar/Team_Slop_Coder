@@ -43,6 +43,7 @@ export interface MergeQueueEntry {
   merged_oid: string | null;
   ejected_reason: string | null;
   executor_device_id: string | null;
+  claimant_device_id: string | null;
   lease_epoch: number;
   attempts: number;
   created_at: string;
@@ -50,7 +51,7 @@ export interface MergeQueueEntry {
 
 const ENTRY_COLS = `id, project_id, repo_id, task_id, position, state, branch, candidate_oid,
   target_branch, speculative_tree_oid, base_oid, push_precondition_oid, validation_run_id,
-  merged_oid, ejected_reason, executor_device_id, lease_epoch, attempts, created_at`;
+  merged_oid, ejected_reason, executor_device_id, claimant_device_id, lease_epoch, attempts, created_at`;
 
 function rowToEntry(r: Record<string, unknown>): MergeQueueEntry {
   return {
@@ -70,6 +71,7 @@ function rowToEntry(r: Record<string, unknown>): MergeQueueEntry {
     merged_oid: r.merged_oid == null ? null : String(r.merged_oid),
     ejected_reason: r.ejected_reason == null ? null : String(r.ejected_reason),
     executor_device_id: r.executor_device_id == null ? null : String(r.executor_device_id),
+    claimant_device_id: r.claimant_device_id == null ? null : String(r.claimant_device_id),
     lease_epoch: Number(r.lease_epoch),
     attempts: Number(r.attempts),
     created_at: String(toIso(r.created_at)),
@@ -131,6 +133,7 @@ export const EnqueueMergeSchema = z.object({
   branch: z.string().min(1),
   candidate_oid: z.string().min(1).optional(),
   target_branch: z.string().min(1).default('main'),
+  claimant_device_id: z.string().min(1).optional(),
 });
 export type EnqueueMergeInput = z.input<typeof EnqueueMergeSchema>;
 
@@ -285,6 +288,7 @@ export class MergeQueueService {
         merged_oid: null,
         ejected_reason: null,
         executor_device_id: null,
+        claimant_device_id: data.claimant_device_id ?? origin.deviceId,
         lease_epoch: 0,
         attempts: 0,
         created_at: new Date().toISOString(),
@@ -629,12 +633,13 @@ export class MergeQueueService {
       `INSERT INTO merge_queue_entries
          (id, project_id, repo_id, task_id, position, state, branch, candidate_oid, target_branch,
           speculative_tree_oid, base_oid, push_precondition_oid, validation_run_id, merged_oid,
-          ejected_reason, executor_device_id, lease_epoch, attempts)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
+          ejected_reason, executor_device_id, claimant_device_id, lease_epoch, attempts)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
       [
         e.id, e.project_id, e.repo_id, e.task_id, e.position, e.state, e.branch, e.candidate_oid,
         e.target_branch, e.speculative_tree_oid, e.base_oid, e.push_precondition_oid,
-        e.validation_run_id, e.merged_oid, e.ejected_reason, e.executor_device_id, e.lease_epoch, e.attempts,
+        e.validation_run_id, e.merged_oid, e.ejected_reason, e.executor_device_id,
+        e.claimant_device_id, e.lease_epoch, e.attempts,
       ],
     );
   }
@@ -644,12 +649,13 @@ export class MergeQueueService {
       `UPDATE merge_queue_entries SET position=$3, state=$4, branch=$5, candidate_oid=$6,
           target_branch=$7, speculative_tree_oid=$8, base_oid=$9, push_precondition_oid=$10,
           validation_run_id=$11, merged_oid=$12, ejected_reason=$13, executor_device_id=$14,
-          lease_epoch=$15, attempts=$16
+          lease_epoch=$15, attempts=$16, claimant_device_id=$17
         WHERE project_id=$1 AND id=$2`,
       [
         e.project_id, e.id, e.position, e.state, e.branch, e.candidate_oid, e.target_branch,
         e.speculative_tree_oid, e.base_oid, e.push_precondition_oid, e.validation_run_id,
         e.merged_oid, e.ejected_reason, e.executor_device_id, e.lease_epoch, e.attempts,
+        e.claimant_device_id,
       ],
     );
   }

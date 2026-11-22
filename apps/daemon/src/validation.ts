@@ -39,6 +39,12 @@ export interface RunValidationInput {
   candidate?: string | undefined;
   trigger?: ValidationTrigger | undefined;
   selection?: ValidationSelection | undefined;
+  /**
+   * Device that authored/claimed the work being validated. When it differs from
+   * this runner the run is labeled independence='independent' — the merge queue
+   * only lands a tree validated on a device other than the claimant's.
+   */
+  claimantDeviceId?: string | undefined;
 }
 
 export interface CheckEvidence {
@@ -211,6 +217,7 @@ export class ValidationSupervisor {
         input.trigger ?? 'manual',
         input.selection ?? 'full',
         input.taskId,
+        input.claimantDeviceId,
       );
     } finally {
       activeGauge.add(-1);
@@ -224,13 +231,15 @@ export class ValidationSupervisor {
     trigger: ValidationTrigger,
     selection: ValidationSelection,
     taskId?: string,
+    claimantDeviceId?: string,
   ): Promise<ValidationRunRecord> {
     const checks = this.options.validation.checks;
     const runId = makeId('validation');
     const tree = await treeOid(repo.root_path, candidateOid, this.binary);
     const startedAt = new Date().toISOString();
     const runnerDevice = this.options.deviceId;
-    const independence: Independence = 'self';
+    const claimantDevice = claimantDeviceId ?? runnerDevice;
+    const independence: Independence = claimantDevice !== runnerDevice ? 'independent' : 'self';
     const inputHash = createHash('sha256')
       .update(
         JSON.stringify({
@@ -257,7 +266,7 @@ export class ValidationSupervisor {
         candidate_oid: candidateOid,
         tree_oid: tree,
         runner_device_id: runnerDevice,
-        claimant_device_id: runnerDevice,
+        claimant_device_id: claimantDevice,
         started_at: startedAt,
         input_hash: inputHash,
         independence,
@@ -282,7 +291,7 @@ export class ValidationSupervisor {
       selection,
       tree_oid: tree,
       runner_device_id: runnerDevice,
-      claimant_device_id: runnerDevice,
+      claimant_device_id: claimantDevice,
       independence,
     });
 
@@ -396,7 +405,7 @@ export class ValidationSupervisor {
       candidate_oid: candidateOid,
       tree_oid: tree,
       runner_device_id: runnerDevice,
-      claimant_device_id: runnerDevice,
+      claimant_device_id: claimantDevice,
       state,
       started_at: startedAt,
       finished_at: finishedAt,
