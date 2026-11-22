@@ -61,6 +61,7 @@ export const TaskStateSchema = z.enum([
 ]);
 
 export type TaskState = z.infer<typeof TaskStateSchema>;
+export type MergeState = z.infer<typeof MergeStateSchema>;
 
 /**
  * Canonical task lifecycle shared by daemon and server so both agree on legal
