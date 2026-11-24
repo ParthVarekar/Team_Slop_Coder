@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import type { z } from 'zod';
@@ -154,7 +154,9 @@ async function start(flags: Record<string, string>): Promise<void> {
       null,
       2,
     ),
+    { mode: 0o600 },
   );
+  chmodSync(statePath, 0o600);
   server.logger.info({ address, pid: process.pid, dataDir: config.dataDir }, 'weft server ready');
   process.on('SIGINT', () => void shutdown('SIGINT'));
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
