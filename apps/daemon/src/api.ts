@@ -2,7 +2,13 @@ import { timingSafeEqual } from 'node:crypto';
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { PROTOCOL_VERSION, TaskStateSchema, type AgentInfo, type Privacy } from '@weft/protocol';
-import { translateHook, AdapterError, denyPreToolUse, CAPABILITY_MANIFEST as CLAUDE_MANIFEST, type CapabilityManifest } from '@weft/adapter-claude-code';
+import {
+  translateHook,
+  AdapterError,
+  denyPreToolUse,
+  CAPABILITY_MANIFEST as CLAUDE_MANIFEST,
+  type CapabilityManifest,
+} from '@weft/adapter-claude-code';
 import {
   translateHook as translateCodexHook,
   translateNotify as translateCodexNotify,
@@ -12,7 +18,33 @@ import {
 import {
   OpenCodeTranslator,
   AdapterError as OpenCodeAdapterError,
+  CAPABILITY_MANIFEST as OPENCODE_MANIFEST,
 } from '@weft/adapter-opencode';
+import {
+  translateHook as translateQoderHook,
+  AdapterError as QoderAdapterError,
+  CAPABILITY_MANIFEST as QODER_MANIFEST,
+} from '@weft/adapter-qoder';
+import {
+  translateHook as translateCursorHook,
+  AdapterError as CursorAdapterError,
+  CAPABILITY_MANIFEST as CURSOR_MANIFEST,
+} from '@weft/adapter-cursor';
+import {
+  translateEvent as translateClineEvent,
+  AdapterError as ClineAdapterError,
+  CAPABILITY_MANIFEST as CLINE_MANIFEST,
+} from '@weft/adapter-cline';
+import {
+  translateEvent as translateGenericCliEvent,
+  AdapterError as GenericCliAdapterError,
+  CAPABILITY_MANIFEST as GENERIC_CLI_MANIFEST,
+} from '@weft/adapter-generic-cli';
+import {
+  translateEvent as translateAiderEvent,
+  AdapterError as AiderAdapterError,
+  CAPABILITY_MANIFEST as AIDER_MANIFEST,
+} from '@weft/adapter-aider';
 import type { Daemon } from './daemon.js';
 import { TaskError, UpdateTaskInputSchema } from './tasks.js';
 import { RepoError } from './repos.js';
@@ -97,7 +129,24 @@ function mcpErrorReply(reply: FastifyReply, err: unknown): FastifyReply {
     const status = err.status >= 400 && err.status < 600 ? err.status : 502;
     return reply.code(status).send({ error: err.code, message: err.message });
   }
-  return reply.code(422).send({ error: 'mcp_error', message: err instanceof Error ? err.message : String(err) });
+  return reply
+    .code(422)
+    .send({ error: 'mcp_error', message: err instanceof Error ? err.message : String(err) });
+}
+
+function isAdapterError(
+  err: unknown,
+): err is { code: 'invalid_hook' | 'invalid_event'; message: string } {
+  return (
+    err instanceof AdapterError ||
+    err instanceof CodexAdapterError ||
+    err instanceof OpenCodeAdapterError ||
+    err instanceof QoderAdapterError ||
+    err instanceof CursorAdapterError ||
+    err instanceof ClineAdapterError ||
+    err instanceof GenericCliAdapterError ||
+    err instanceof AiderAdapterError
+  );
 }
 
 function repoErrorReply(reply: FastifyReply, err: RepoError): FastifyReply {
@@ -114,7 +163,10 @@ const ProvisionWorktreeBody = z.object({
 });
 const AssignAgentBody = z.object({ pid: z.number().int().positive() });
 const DetectConflictsBody = z.object({
-  tasks: z.array(z.object({ task_id: z.string().min(1), branch: z.string().min(1) })).min(1).max(200),
+  tasks: z
+    .array(z.object({ task_id: z.string().min(1), branch: z.string().min(1) }))
+    .min(1)
+    .max(200),
   base_ref: z.string().min(1).optional(),
   epoch: z.number().int().nonnegative().optional(),
 });
@@ -165,8 +217,31 @@ interface TranslatedEvent {
   privacy?: Privacy;
 }
 
+interface AdapterTranslationContext {
+  deviceId: string;
+  projectId: string;
+  userId: string;
+  repoId?: string;
+  cwd?: string;
+  model?: string;
+}
+
+const ADAPTER_MANIFESTS = [
+  CLAUDE_MANIFEST,
+  CODEX_MANIFEST,
+  OPENCODE_MANIFEST,
+  QODER_MANIFEST,
+  CURSOR_MANIFEST,
+  CLINE_MANIFEST,
+  GENERIC_CLI_MANIFEST,
+  AIDER_MANIFEST,
+] as const;
+
 /** Resolve sessions, stamp adapter drafts into protocol-v1 envelopes, ingest. */
-function ingestDrafts(daemon: Daemon, events: readonly TranslatedEvent[]): { accepted: number; count: number } {
+function ingestDrafts(
+  daemon: Daemon,
+  events: readonly TranslatedEvent[],
+): { accepted: number; count: number } {
   let accepted = 0;
   for (const event of events) {
     const sessionId = daemon.resolveSession(event.providerSessionId);
@@ -236,7 +311,11 @@ function ingestWithEnforcement(
     ingestDrafts(daemon, events); // record the blocked attempt before denying
     return reply
       .code(200)
-      .send(denyPreToolUse(`File '${path}' is hard-reserved by another task; edit blocked by Weft team coordination.`));
+      .send(
+        denyPreToolUse(
+          `File '${path}' is hard-reserved by another task; edit blocked by Weft team coordination.`,
+        ),
+      );
   }
   return ingestAdapterEvents(daemon, events, reply);
 }
@@ -269,6 +348,24 @@ export function createApiServer(daemon: Daemon, options: ApiServerOptions = {}):
   // tool-call id, so one stateful translator serves the whole daemon.
   const opencodeTranslator = new OpenCodeTranslator(adapterContext);
 
+  const translateAndIngest = (
+    raw: unknown,
+    translate: (raw: unknown, ctx: AdapterTranslationContext) => readonly TranslatedEvent[],
+    manifest: CapabilityManifest | null,
+    reply: FastifyReply,
+  ): FastifyReply => {
+    try {
+      const events = translate(raw, adapterContext);
+      return manifest
+        ? ingestWithEnforcement(daemon, events, manifest, reply)
+        : ingestAdapterEvents(daemon, events, reply);
+    } catch (err) {
+      if (isAdapterError(err))
+        return reply.code(422).send({ error: err.code, message: err.message });
+      throw err;
+    }
+  };
+
   app.addHook('preHandler', async (req, reply) => {
     const path = req.url.split('?')[0] ?? '';
     if (!path.startsWith('/v1/') || path === '/v1/bootstrap') return;
@@ -297,6 +394,8 @@ export function createApiServer(daemon: Daemon, options: ApiServerOptions = {}):
     mode: daemon.config.mode,
     protocol_version: PROTOCOL_VERSION,
   }));
+
+  app.get('/v1/adapters', async () => ({ adapters: ADAPTER_MANIFESTS }));
 
   // Graceful shutdown trigger (cross-platform; signals are unreliable on Windows).
   app.post('/v1/shutdown', async (_req, reply) => {
@@ -349,6 +448,26 @@ export function createApiServer(daemon: Daemon, options: ApiServerOptions = {}):
     }
     return ingestAdapterEvents(daemon, events, reply);
   });
+
+  // Qoder and Cursor native hooks participate in pre-tool checks but currently
+  // return advisory responses, so both use their fail-open capability manifests.
+  app.post('/v1/hooks/qoder', (req, reply) =>
+    translateAndIngest(req.body, translateQoderHook, QODER_MANIFEST, reply),
+  );
+  app.post('/v1/hooks/cursor', (req, reply) =>
+    translateAndIngest(req.body, translateCursorHook, CURSOR_MANIFEST, reply),
+  );
+
+  // Observe-only bridges: these adapters cannot synchronously deny a tool.
+  app.post('/v1/cline/event', (req, reply) =>
+    translateAndIngest(req.body, translateClineEvent, null, reply),
+  );
+  app.post('/v1/generic-cli/event', (req, reply) =>
+    translateAndIngest(req.body, translateGenericCliEvent, null, reply),
+  );
+  app.post('/v1/aider/event', (req, reply) =>
+    translateAndIngest(req.body, translateAiderEvent, null, reply),
+  );
 
   // OpenCode durable session-event stream (SSE frames bridged via POST). Observe-
   // only: no PreToolUse enforcement. Accepts a single frame or a batch of frames.
@@ -496,7 +615,10 @@ export function createApiServer(daemon: Daemon, options: ApiServerOptions = {}):
   // the source of truth; these read the daemon's folded coordination cache.
   app.get('/v1/team/tasks', async (_req, reply) => {
     if (!daemon.taskCache) return reply.code(404).send({ error: 'not_team_mode' });
-    return { ...daemon.taskCache.snapshot(), connected: daemon.coordination?.isConnected() ?? false };
+    return {
+      ...daemon.taskCache.snapshot(),
+      connected: daemon.coordination?.isConnected() ?? false,
+    };
   });
 
   app.get('/v1/team/tasks/:id', async (req, reply) => {
@@ -623,7 +745,11 @@ export function createApiServer(daemon: Daemon, options: ApiServerOptions = {}):
     if (!parsed.success)
       return reply.code(400).send({ error: 'validation', message: parsed.error.message });
     try {
-      const claim = daemon.tasks.claimCompletion(id, parsed.data.claim_text, parsed.data.session_id);
+      const claim = daemon.tasks.claimCompletion(
+        id,
+        parsed.data.claim_text,
+        parsed.data.session_id,
+      );
       return reply.code(201).send({ claim });
     } catch (err) {
       if (err instanceof TaskError) return taskErrorReply(reply, err);
@@ -979,34 +1105,46 @@ export function createApiServer(daemon: Daemon, options: ApiServerOptions = {}):
   app.post('/v1/repos/:id/affected-tests', async (req, reply) => {
     const { id } = req.params as { id: string };
     const parsed = AffectedTestsBody.safeParse(req.body ?? {});
-    if (!parsed.success) return reply.code(400).send({ error: 'validation', message: parsed.error.message });
+    if (!parsed.success)
+      return reply.code(400).send({ error: 'validation', message: parsed.error.message });
     try {
       const tests = await daemon.tia.affectedTests(id, parsed.data.changed_paths, {
         ...(parsed.data.path ? { path: parsed.data.path } : {}),
         ...(parsed.data.exclude ? { exclude: parsed.data.exclude } : {}),
       });
-      return reply.send({ repo_id: id, changed_paths: parsed.data.changed_paths, affected_tests: tests });
+      return reply.send({
+        repo_id: id,
+        changed_paths: parsed.data.changed_paths,
+        affected_tests: tests,
+      });
     } catch (err) {
       if (err instanceof ModuleGraphError)
-        return reply.code(err.code === 'not_found' ? 404 : 500).send({ error: err.code, message: err.message });
+        return reply
+          .code(err.code === 'not_found' ? 404 : 500)
+          .send({ error: err.code, message: err.message });
       throw err;
     }
   });
 
   const ContractGatesBody = z.object({
-    gates: z.array(z.object({
-      gate_id: z.string().min(1),
-      tool: z.enum(['oasdiff', 'buf', 'squawk', 'prisma', 'custom']),
-      command: z.string().min(1),
-      args: z.array(z.string()).optional(),
-      blocking: z.boolean().optional(),
-      timeoutMs: z.number().int().positive().optional(),
-    })).min(1),
+    gates: z
+      .array(
+        z.object({
+          gate_id: z.string().min(1),
+          tool: z.enum(['oasdiff', 'buf', 'squawk', 'prisma', 'custom']),
+          command: z.string().min(1),
+          args: z.array(z.string()).optional(),
+          blocking: z.boolean().optional(),
+          timeoutMs: z.number().int().positive().optional(),
+        }),
+      )
+      .min(1),
   });
   app.post('/v1/repos/:id/contract-gates', async (req, reply) => {
     const { id } = req.params as { id: string };
     const parsed = ContractGatesBody.safeParse(req.body ?? {});
-    if (!parsed.success) return reply.code(400).send({ error: 'validation', message: parsed.error.message });
+    if (!parsed.success)
+      return reply.code(400).send({ error: 'validation', message: parsed.error.message });
     const repo = daemon.repos.get(id);
     if (!repo) return reply.code(404).send({ error: 'not_found', message: `repo ${id} not found` });
     const gates: ContractGateConfig[] = parsed.data.gates.map((gate) => ({
@@ -1024,12 +1162,15 @@ export function createApiServer(daemon: Daemon, options: ApiServerOptions = {}):
   const AttributeBody = z.object({
     baseline_oid: z.string().min(1),
     head: z.string().min(1).optional(),
-    failing_checks: z.array(z.object({ check_id: z.string().min(1), paths: z.array(z.string()) })).min(1),
+    failing_checks: z
+      .array(z.object({ check_id: z.string().min(1), paths: z.array(z.string()) }))
+      .min(1),
   });
   app.post('/v1/repos/:id/attribution', async (req, reply) => {
     const { id } = req.params as { id: string };
     const parsed = AttributeBody.safeParse(req.body ?? {});
-    if (!parsed.success) return reply.code(400).send({ error: 'validation', message: parsed.error.message });
+    if (!parsed.success)
+      return reply.code(400).send({ error: 'validation', message: parsed.error.message });
     try {
       const suspects = await daemon.attribution.attribute(id, {
         baselineOid: parsed.data.baseline_oid,
@@ -1039,7 +1180,9 @@ export function createApiServer(daemon: Daemon, options: ApiServerOptions = {}):
       return reply.send({ repo_id: id, suspects });
     } catch (err) {
       if (err instanceof AttributionError)
-        return reply.code(err.code === 'not_found' ? 404 : 500).send({ error: err.code, message: err.message });
+        return reply
+          .code(err.code === 'not_found' ? 404 : 500)
+          .send({ error: err.code, message: err.message });
       throw err;
     }
   });
@@ -1051,13 +1194,20 @@ export function createApiServer(daemon: Daemon, options: ApiServerOptions = {}):
   app.post('/v1/repos/:id/revert-test', async (req, reply) => {
     const { id } = req.params as { id: string };
     const parsed = RevertTestBody.safeParse(req.body ?? {});
-    if (!parsed.success) return reply.code(400).send({ error: 'validation', message: parsed.error.message });
+    if (!parsed.success)
+      return reply.code(400).send({ error: 'validation', message: parsed.error.message });
     try {
-      const result = await daemon.attribution.revertTest(id, parsed.data.suspect_oid, parsed.data.head);
+      const result = await daemon.attribution.revertTest(
+        id,
+        parsed.data.suspect_oid,
+        parsed.data.head,
+      );
       return reply.send({ repo_id: id, ...result });
     } catch (err) {
       if (err instanceof AttributionError)
-        return reply.code(err.code === 'not_found' ? 404 : 500).send({ error: err.code, message: err.message });
+        return reply
+          .code(err.code === 'not_found' ? 404 : 500)
+          .send({ error: err.code, message: err.message });
       throw err;
     }
   });
@@ -1065,12 +1215,16 @@ export function createApiServer(daemon: Daemon, options: ApiServerOptions = {}):
   app.post('/v1/repos/:id/merge/tick', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!daemon.mergeExecutor)
-      return reply.code(409).send({ error: 'solo_mode', message: 'merge executor requires team mode' });
+      return reply
+        .code(409)
+        .send({ error: 'solo_mode', message: 'merge executor requires team mode' });
     try {
       return reply.send(await daemon.mergeExecutor.tick(id));
     } catch (err) {
       if (err instanceof MergeExecutorError)
-        return reply.code(err.code === 'not_found' ? 404 : 500).send({ error: err.code, message: err.message });
+        return reply
+          .code(err.code === 'not_found' ? 404 : 500)
+          .send({ error: err.code, message: err.message });
       if (err instanceof CoordinationRpcError)
         return reply.code(err.status).send({ error: err.code, message: err.message });
       throw err;
@@ -1086,9 +1240,13 @@ export function createApiServer(daemon: Daemon, options: ApiServerOptions = {}):
   });
   app.post('/v1/repos/:id/merge/enqueue', async (req, reply) => {
     const { id } = req.params as { id: string };
-    if (!daemon.rpc) return reply.code(409).send({ error: 'solo_mode', message: 'merge queue requires team mode' });
+    if (!daemon.rpc)
+      return reply
+        .code(409)
+        .send({ error: 'solo_mode', message: 'merge queue requires team mode' });
     const parsed = EnqueueMergeBody.safeParse(req.body ?? {});
-    if (!parsed.success) return reply.code(400).send({ error: 'validation', message: parsed.error.message });
+    if (!parsed.success)
+      return reply.code(400).send({ error: 'validation', message: parsed.error.message });
     try {
       const entry = await daemon.rpc.enqueue({
         repo_id: id,
@@ -1096,7 +1254,9 @@ export function createApiServer(daemon: Daemon, options: ApiServerOptions = {}):
         branch: parsed.data.branch,
         ...(parsed.data.candidate_oid ? { candidate_oid: parsed.data.candidate_oid } : {}),
         ...(parsed.data.target_branch ? { target_branch: parsed.data.target_branch } : {}),
-        ...(parsed.data.claimant_device_id ? { claimant_device_id: parsed.data.claimant_device_id } : {}),
+        ...(parsed.data.claimant_device_id
+          ? { claimant_device_id: parsed.data.claimant_device_id }
+          : {}),
       });
       return reply.code(201).send({ entry });
     } catch (err) {
@@ -1108,10 +1268,16 @@ export function createApiServer(daemon: Daemon, options: ApiServerOptions = {}):
 
   app.get('/v1/repos/:id/merge/entries', async (req, reply) => {
     const { id } = req.params as { id: string };
-    if (!daemon.rpc) return reply.code(409).send({ error: 'solo_mode', message: 'merge queue requires team mode' });
+    if (!daemon.rpc)
+      return reply
+        .code(409)
+        .send({ error: 'solo_mode', message: 'merge queue requires team mode' });
     const q = req.query as { state?: string };
     try {
-      const entries = await daemon.rpc.listEntries({ repoId: id, ...(q.state ? { state: q.state } : {}) });
+      const entries = await daemon.rpc.listEntries({
+        repoId: id,
+        ...(q.state ? { state: q.state } : {}),
+      });
       return reply.send({ entries });
     } catch (err) {
       if (err instanceof CoordinationRpcError)

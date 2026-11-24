@@ -39,7 +39,31 @@ importers:
         specifier: ^3.2.7
         version: 3.2.7(@types/node@24.19.2)(jiti@2.7.0)(lightningcss@1.33.0)(supports-color@7.2.0)(tsx@4.23.15)
 
+  adapters/aider:
+    dependencies:
+      '@weft/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@weft/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
+      zod:
+        specifier: ^3.25.76
+        version: 3.25.76
+
   adapters/claude-code:
+    dependencies:
+      '@weft/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@weft/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
+      zod:
+        specifier: ^3.25.76
+        version: 3.25.76
+
+  adapters/cline:
     dependencies:
       '@weft/core':
         specifier: workspace:*
@@ -63,7 +87,43 @@ importers:
         specifier: ^3.25.76
         version: 3.25.76
 
+  adapters/cursor:
+    dependencies:
+      '@weft/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@weft/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
+      zod:
+        specifier: ^3.25.76
+        version: 3.25.76
+
+  adapters/generic-cli:
+    dependencies:
+      '@weft/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@weft/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
+      zod:
+        specifier: ^3.25.76
+        version: 3.25.76
+
   adapters/opencode:
+    dependencies:
+      '@weft/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@weft/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
+      zod:
+        specifier: ^3.25.76
+        version: 3.25.76
+
+  adapters/qoder:
     dependencies:
       '@weft/core':
         specifier: workspace:*
@@ -80,15 +140,30 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.32.2
         version: 1.32.2(supports-color@7.2.0)(zod@3.25.76)
+      '@weft/adapter-aider':
+        specifier: workspace:*
+        version: link:../../adapters/aider
       '@weft/adapter-claude-code':
         specifier: workspace:*
         version: link:../../adapters/claude-code
+      '@weft/adapter-cline':
+        specifier: workspace:*
+        version: link:../../adapters/cline
       '@weft/adapter-codex':
         specifier: workspace:*
         version: link:../../adapters/codex
+      '@weft/adapter-cursor':
+        specifier: workspace:*
+        version: link:../../adapters/cursor
+      '@weft/adapter-generic-cli':
+        specifier: workspace:*
+        version: link:../../adapters/generic-cli
       '@weft/adapter-opencode':
         specifier: workspace:*
         version: link:../../adapters/opencode
+      '@weft/adapter-qoder':
+        specifier: workspace:*
+        version: link:../../adapters/qoder
       '@weft/core':
         specifier: workspace:*
         version: link:../../packages/core

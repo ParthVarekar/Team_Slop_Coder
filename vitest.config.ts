@@ -11,6 +11,11 @@ export default defineConfig({
       '@weft/adapter-claude-code': r('./adapters/claude-code/src/index.ts'),
       '@weft/adapter-codex': r('./adapters/codex/src/index.ts'),
       '@weft/adapter-opencode': r('./adapters/opencode/src/index.ts'),
+      '@weft/adapter-cursor': r('./adapters/cursor/src/index.ts'),
+      '@weft/adapter-qoder': r('./adapters/qoder/src/index.ts'),
+      '@weft/adapter-cline': r('./adapters/cline/src/index.ts'),
+      '@weft/adapter-generic-cli': r('./adapters/generic-cli/src/index.ts'),
+      '@weft/adapter-aider': r('./adapters/aider/src/index.ts'),
     },
   },
   test: {

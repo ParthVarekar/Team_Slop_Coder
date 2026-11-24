@@ -1,0 +1,26 @@
+{
+  "name": "@weft/adapter-cline",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Weft adapter for Cline task/tool events pushed by the SDK/OTel bridge (observe-only telemetry).",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@weft/core": "workspace:*",
+    "@weft/protocol": "workspace:*",
+    "zod": "^3.25.76"
+  }
+}

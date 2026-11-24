@@ -8,6 +8,11 @@
     { "path": "adapters/claude-code" },
     { "path": "adapters/codex" },
     { "path": "adapters/opencode" },
+    { "path": "adapters/cursor" },
+    { "path": "adapters/qoder" },
+    { "path": "adapters/cline" },
+    { "path": "adapters/generic-cli" },
+    { "path": "adapters/aider" },
     { "path": "bench" }
   ]
 }

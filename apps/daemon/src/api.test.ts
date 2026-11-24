@@ -259,13 +259,22 @@ describe('local API', () => {
       method: 'POST',
       url: '/v1/hooks/codex',
       headers: auth(),
-      payload: { session_id: 'thr_n', cwd: '/repo', hook_event_name: 'SessionStart', source: 'startup' },
+      payload: {
+        session_id: 'thr_n',
+        cwd: '/repo',
+        hook_event_name: 'SessionStart',
+        source: 'startup',
+      },
     });
     const notify = await api.app.inject({
       method: 'POST',
       url: '/v1/notify/codex',
       headers: auth(),
-      payload: { type: 'agent-turn-complete', 'thread-id': 'thr_n', 'last-assistant-message': 'Done.' },
+      payload: {
+        type: 'agent-turn-complete',
+        'thread-id': 'thr_n',
+        'last-assistant-message': 'Done.',
+      },
     });
     expect(notify.statusCode).toBe(202);
     expect(notify.json().accepted).toBe(1);
@@ -288,6 +297,195 @@ describe('local API', () => {
     expect(res.statusCode).toBe(422);
   });
 
+  const adapterCases: {
+    name: string;
+    url: string;
+    provider: string;
+    payloads: Record<string, unknown>[];
+    types: string[];
+  }[] = [
+    {
+      name: 'Qoder',
+      url: '/v1/hooks/qoder',
+      provider: 'qoder',
+      payloads: [
+        { session_id: 'native-qoder', cwd: '/repo', hook_event_name: 'SessionStart' },
+        {
+          session_id: 'native-qoder',
+          hook_event_name: 'PostToolUse',
+          tool_name: 'apply_patch',
+          tool_input: { command: '*** Begin Patch\n*** Add File: a.ts\n+x\n*** End Patch' },
+          tool_response: { success: true },
+        },
+      ],
+      types: ['session.started', 'tool.post', 'file.changed'],
+    },
+    {
+      name: 'Cursor',
+      url: '/v1/hooks/cursor',
+      provider: 'cursor',
+      payloads: [
+        { conversation_id: 'native-cursor', cwd: '/repo', hook_event_name: 'sessionStart' },
+        {
+          conversation_id: 'native-cursor',
+          hook_event_name: 'afterShellExecution',
+          command: 'pnpm test',
+          exit_code: 0,
+          output: 'ok',
+        },
+        {
+          conversation_id: 'native-cursor',
+          hook_event_name: 'afterFileEdit',
+          file_path: 'src/a.ts',
+        },
+      ],
+      types: ['session.started', 'tool.post', 'command.executed', 'file.changed'],
+    },
+    {
+      name: 'Cline',
+      url: '/v1/cline/event',
+      provider: 'cline',
+      payloads: [
+        { task_id: 'native-cline', kind: 'task.started', cwd: '/repo' },
+        {
+          task_id: 'native-cline',
+          kind: 'tool.completed',
+          tool_name: 'write_file',
+          success: true,
+          path: 'src/a.ts',
+        },
+      ],
+      types: ['session.started', 'tool.post', 'file.changed'],
+    },
+    {
+      name: 'generic CLI',
+      url: '/v1/generic-cli/event',
+      provider: 'generic',
+      payloads: [
+        { session_id: 'native-generic', kind: 'start', cwd: '/repo' },
+        {
+          session_id: 'native-generic',
+          kind: 'command',
+          command: 'pnpm test',
+          exit_code: 0,
+          files: [{ path: 'src/a.ts' }],
+        },
+      ],
+      types: ['session.started', 'command.executed', 'file.changed'],
+    },
+    {
+      name: 'Aider',
+      url: '/v1/aider/event',
+      provider: 'aider',
+      payloads: [
+        { session_id: 'native-aider', kind: 'session_start', cwd: '/repo' },
+        {
+          session_id: 'native-aider',
+          kind: 'commit',
+          commit_oid: 'a'.repeat(40),
+          branch: 'main',
+          parents: ['b'.repeat(40)],
+          files: [{ path: 'src/a.ts' }],
+        },
+      ],
+      types: ['session.started', 'commit.created', 'file.changed'],
+    },
+  ];
+
+  it.each(adapterCases)(
+    'translates $name events with stable provider attribution',
+    async ({ url, provider, payloads, types }) => {
+      for (const payload of payloads) {
+        const res = await api.app.inject({ method: 'POST', url, headers: auth(), payload });
+        expect(res.statusCode).toBe(202);
+      }
+      daemon.pipeline.flush();
+      const events = await api.app.inject({ method: 'GET', url: '/v1/events', headers: auth() });
+      expect(events.json().events.map((e: { type: string }) => e.type)).toEqual(types);
+      const sessions = await api.app.inject({
+        method: 'GET',
+        url: '/v1/sessions',
+        headers: auth(),
+      });
+      expect(sessions.json().sessions).toHaveLength(1);
+      expect(sessions.json().sessions[0].provider_id).toBe(provider);
+    },
+  );
+
+  it('accepts unmappable adapter events without fabricating activity', async () => {
+    for (const { url } of adapterCases) {
+      const payload = url.startsWith('/v1/hooks/')
+        ? { session_id: 'unknown', conversation_id: 'unknown', hook_event_name: 'SomeFutureHook' }
+        : { session_id: 'unknown', task_id: 'unknown', kind: 'some_future_event' };
+      const res = await api.app.inject({ method: 'POST', url, headers: auth(), payload });
+      expect(res.statusCode).toBe(202);
+      expect(res.json()).toEqual({ accepted: 0, count: 0 });
+    }
+    daemon.pipeline.flush();
+    const events = await api.app.inject({ method: 'GET', url: '/v1/events', headers: auth() });
+    const sessions = await api.app.inject({ method: 'GET', url: '/v1/sessions', headers: auth() });
+    expect(events.json().events).toEqual([]);
+    expect(sessions.json().sessions).toEqual([]);
+  });
+
+  it.each(adapterCases)('rejects malformed $name payloads with 422', async ({ url }) => {
+    const res = await api.app.inject({
+      method: 'POST',
+      url,
+      headers: auth(),
+      payload: url.startsWith('/v1/hooks/') ? { hook_event_name: 'stop' } : { kind: 'start' },
+    });
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error).toMatch(/^invalid_(hook|event)$/);
+  });
+
+  it.each(adapterCases)('requires authentication for $name ingestion', async ({ url }) => {
+    const res = await api.app.inject({ method: 'POST', url, payload: {} });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('exposes honest capability manifests for every registered adapter', async () => {
+    const denied = await api.app.inject({ method: 'GET', url: '/v1/adapters' });
+    expect(denied.statusCode).toBe(401);
+    const res = await api.app.inject({ method: 'GET', url: '/v1/adapters', headers: auth() });
+    expect(res.statusCode).toBe(200);
+    const adapters = res.json().adapters as {
+      provider: string;
+      fidelity: string;
+      enforcement: { hardBlock: boolean };
+    }[];
+    expect(adapters.map((a) => a.provider)).toEqual([
+      'claude-code',
+      'codex',
+      'opencode',
+      'qoder',
+      'cursor',
+      'cline',
+      'generic',
+      'aider',
+    ]);
+    expect(adapters.find((a) => a.provider === 'qoder')).toMatchObject({
+      fidelity: 'high',
+      enforcement: { hardBlock: false },
+    });
+    expect(adapters.find((a) => a.provider === 'cursor')).toMatchObject({
+      fidelity: 'medium',
+      enforcement: { hardBlock: false },
+    });
+    expect(adapters.find((a) => a.provider === 'cline')).toMatchObject({
+      fidelity: 'medium',
+      enforcement: { hardBlock: false },
+    });
+    expect(adapters.find((a) => a.provider === 'generic')).toMatchObject({
+      fidelity: 'low',
+      enforcement: { hardBlock: false },
+    });
+    expect(adapters.find((a) => a.provider === 'aider')).toMatchObject({
+      fidelity: 'low',
+      enforcement: { hardBlock: false },
+    });
+  });
+
   it('translates an OpenCode SSE frame batch with cross-frame tool correlation', async () => {
     const sid = 'ses_oc_api';
     const f = (type: string, data: Record<string, unknown> = {}) => ({
@@ -300,10 +498,21 @@ describe('local API', () => {
       url: '/v1/opencode/event',
       headers: auth(),
       payload: [
-        f('session.created', { location: { directory: '/repo' }, model: { providerID: 'anthropic', modelID: 'claude-sonnet-4-5' } }),
+        f('session.created', {
+          location: { directory: '/repo' },
+          model: { providerID: 'anthropic', modelID: 'claude-sonnet-4-5' },
+        }),
         f('session.tool.input.started', { id: 't1', name: 'edit' }),
-        f('session.tool.called', { id: 't1', input: { filePath: 'src/a.ts', oldString: 'x', newString: 'y' }, executed: true }),
-        f('session.tool.success', { id: 't1', content: [{ type: 'text', text: 'edited' }], executed: true }),
+        f('session.tool.called', {
+          id: 't1',
+          input: { filePath: 'src/a.ts', oldString: 'x', newString: 'y' },
+          executed: true,
+        }),
+        f('session.tool.success', {
+          id: 't1',
+          content: [{ type: 'text', text: 'edited' }],
+          executed: true,
+        }),
       ],
     });
     expect(res.statusCode).toBe(202);
@@ -509,7 +718,10 @@ describe('repo API', () => {
     const repoPath = makeGitRepo();
     const g = (args: string[]) =>
       execFileSync('git', args, { cwd: repoPath, encoding: 'utf8', windowsHide: true });
-    writeFileSync(join(repoPath, 'sym.ts'), 'export function hello(name: string): string { return name; }\n');
+    writeFileSync(
+      join(repoPath, 'sym.ts'),
+      'export function hello(name: string): string { return name; }\n',
+    );
     g(['add', '-A']);
     g(['commit', '-qm', 'sym']);
     const create = await api.app.inject({
@@ -576,7 +788,8 @@ describe('repo API', () => {
     const repoPath = makeGitRepo();
     const g = (args: string[]) =>
       execFileSync('git', args, { cwd: repoPath, encoding: 'utf8', windowsHide: true });
-    const lib = 'export function foo(): number {\n  const a = 1;\n  const b = 2;\n  return a + b;\n}\n';
+    const lib =
+      'export function foo(): number {\n  const a = 1;\n  const b = 2;\n  return a + b;\n}\n';
     writeFileSync(join(repoPath, 'lib.ts'), lib);
     g(['add', '-A']);
     g(['commit', '-qm', 'lib']);
@@ -602,7 +815,12 @@ describe('repo API', () => {
       method: 'POST',
       url: `/v1/repos/${repo.repo_id}/overlaps`,
       headers: auth(),
-      payload: { tasks: [{ task_id: 'tA', branch: 'taskA' }, { task_id: 'tB', branch: 'taskB' }] },
+      payload: {
+        tasks: [
+          { task_id: 'tA', branch: 'taskA' },
+          { task_id: 'tB', branch: 'taskB' },
+        ],
+      },
     });
     expect(res.statusCode).toBe(200);
     expect(res.json().overlaps).toHaveLength(1);
@@ -910,7 +1128,11 @@ describe('PreToolUse hard-lock enforcement', () => {
     return sessionId;
   }
 
-  function preToolUseHook(providerSessionId: string, toolName: string, input: Record<string, unknown>) {
+  function preToolUseHook(
+    providerSessionId: string,
+    toolName: string,
+    input: Record<string, unknown>,
+  ) {
     return {
       session_id: providerSessionId,
       hook_event_name: 'PreToolUse',

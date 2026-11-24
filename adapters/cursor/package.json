@@ -1,0 +1,26 @@
+{
+  "name": "@weft/adapter-cursor",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Weft adapter for Cursor agent hooks (beta): command/file lifecycle telemetry + fail-open guardrail enforcement.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@weft/core": "workspace:*",
+    "@weft/protocol": "workspace:*",
+    "zod": "^3.25.76"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "name": "@weft/adapter-generic-cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Weft adapter for wrapping arbitrary CLI coding agents (low-fidelity observe-only).",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@weft/core": "workspace:*",
+    "@weft/protocol": "workspace:*",
+    "zod": "^3.25.76"
+  }
+}
