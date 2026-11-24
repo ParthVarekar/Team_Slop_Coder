@@ -116,6 +116,101 @@ export interface DirectoryEntry {
 
 export type ConnectionStatus = 'connecting' | 'live' | 'reconnecting' | 'offline';
 
+export interface RetentionPolicy {
+  version: 'retention-allowlist-v1';
+  cutoff: string;
+  batchLimit: number;
+  allowlist: string[];
+}
+
+export interface RetentionPreview {
+  sequenceKind: 'rowid' | 'global_seq';
+  projectId: string | null;
+  cutoff: string;
+  policy: RetentionPolicy;
+  policyVersion: string;
+  allowlist: string[];
+  dryRun: boolean;
+  batchLimit: number;
+  eligibleRows: number;
+  eligiblePayloadBytes: number;
+  selectedRows: number;
+  selectedPayloadBytes: number;
+  remainingAfterBatch: number;
+  exclusions: {
+    protectedCoordination: number;
+    protectedUnknown: number;
+    protectedOrNonAllowlisted: number;
+    protectedReceipts: number;
+    tooNew: number;
+  };
+  summaryCount: number;
+  rangeCount: number;
+  ranges: { sequenceKind: string; seqStart: number; seqEnd: number }[];
+  fingerprint: string;
+  generatedAt: string;
+  measurements: {
+    payloadBytes: { value: number | null; label: string; scope: string };
+    storedTupleEstimateBytes: { value: number | null; label: string; scope: string };
+    allocatedRelationBytes: { value: number | null; label: string; scope: string };
+    freePagesBytes: { value: number | null; label: string; scope: string };
+  };
+}
+
+export interface RetentionResult extends RetentionPreview {
+  runId: string;
+  committed: true;
+  committedAt: string;
+  idempotent: boolean;
+  summaryEventIds: string[];
+}
+
+export interface RetentionStatus {
+  policyVersion: string;
+  allowlist: string[];
+  defaultTelemetryDays: number;
+  batchLimit: number;
+  scheduler: {
+    enabled?: boolean;
+    running?: boolean;
+    destructiveApply: false;
+    partitionAutomation?: {
+      enabled: boolean;
+      running: boolean;
+      lastRunAt: string | null;
+      nextRunAt: string | null;
+    };
+  };
+  exactCounts: {
+    events: number;
+    coordinationEvents: number;
+    receipts: number;
+    summaries: number;
+    ranges: number;
+    completedRuns: number;
+  };
+  lastRun: { runId: string; completedAt: string; selectedCount: number } | null;
+  outbox?: { pending: number; coordinationPending: number; backpressure: boolean };
+  partitions: null | {
+    current: string;
+    next: string;
+    retained: string[];
+    defaultRetained: boolean;
+    destructiveOperations: false;
+  };
+  byteMetrics: RetentionPreview['measurements'];
+  limitations: string[];
+}
+
+export interface CompactionNotice {
+  sequenceKind: 'rowid' | 'global_seq';
+  seqStart: number;
+  seqEnd: number;
+  runId?: string;
+  summaryEventId?: string | null;
+  receivedAt: number;
+}
+
 export function isSystemActor(actor: Actor): actor is { system: string } {
   return 'system' in actor;
 }

@@ -10,7 +10,7 @@ import {
   ConflictSeveritySchema,
   ConflictKindSchema,
 } from '@weft/protocol';
-import { createLogger, type Logger } from '@weft/core';
+import { createLogger, RetentionError, validateRetentionPolicy, type Logger } from '@weft/core';
 import { openCentralDatabase, type CentralDatabase } from './db.js';
 import { IngestService, MAX_INGEST_BATCH } from './ingest.js';
 import {
@@ -71,6 +71,7 @@ import {
   WebhookService,
 } from './webhook-service.js';
 import type { WebhookTransport } from './webhook-transport.js';
+import { CentralRetentionService } from './retention.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -211,6 +212,24 @@ const WebhooksQuery = z.object({
 const WebhookDeliveriesQuery = WebhooksQuery;
 const MembersQuery = z.object({ projectId: z.string().min(1).optional() });
 const ProjectBody = z.object({ projectId: z.string().min(1).optional() });
+const RetentionPreviewBody = z.object({
+  projectId: z.string().min(1),
+  cutoff: z.string().datetime({ offset: true }).optional(),
+  batchLimit: z.number().int().min(1).max(1000).optional(),
+});
+const RetentionApplyBody = z.object({
+  projectId: z.string().min(1),
+  runId: z.string().min(1).max(200),
+  fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+  cutoff: z.string().datetime({ offset: true }),
+  policy: z.object({
+    version: z.literal('retention-allowlist-v1'),
+    cutoff: z.string().datetime({ offset: true }),
+    batchLimit: z.number().int().min(1).max(1000),
+    allowlist: z.array(z.string()),
+  }),
+  confirm: z.literal(true),
+});
 const EnqueueMergeBody = EnqueueMergeSchema.extend({ projectId: z.string().min(1).optional() });
 const MergeEntriesQuery = z.object({
   projectId: z.string().min(1).optional(),
@@ -367,9 +386,16 @@ export async function createServer(
   const mergeQueue = new MergeQueueService(db.pool, serverDeviceId, logger);
   const health = new HealthService(db.pool, serverDeviceId, logger);
   const activeStreams = new Set<() => void>();
+  const retention = new CentralRetentionService(db.pool, {
+    logger,
+    onCommit: (projectId) => hub.invalidate(projectId),
+  });
+  retention.start();
 
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof AuthError) return reply.code(err.status).send({ error: err.reason });
+    if (err instanceof RetentionError)
+      return reply.code(err.status).send({ error: err.code, message: err.message });
     if (err instanceof TaskError) {
       const status =
         err.code === 'not_found'
@@ -572,11 +598,56 @@ export async function createServer(
         ORDER BY global_seq ASC LIMIT $3`,
       [projectId, after, q.data.limit],
     );
+    const lastRowSeq = rows.rows.length
+      ? Number(rows.rows[rows.rows.length - 1]!.global_seq)
+      : after;
     return reply.send({
       events: rows.rows.map(mapStoredEvent),
       cursor: { last_seq: lastSeq, min_seq: minSeq },
       resync,
+      // Range notices belong to the client's original cursor, even when the
+      // event query resumes forward below the min_seq watermark after resync.
+      ranges: await retention.ranges(projectId, q.data.afterSeq, lastRowSeq),
     });
+  });
+
+  app.get('/v1/retention/status', async (req, reply) => {
+    const q = z.object({ projectId: z.string().min(1).optional() }).safeParse(req.query);
+    if (!q.success) return reply.code(400).send({ error: 'validation', message: q.error.message });
+    const g = await guard(req, reply, 'read', q.data.projectId);
+    if (!g) return;
+    if (!g.projectId)
+      return reply.code(400).send({ error: 'validation', message: 'projectId is required' });
+    return reply.send(await retention.status(g.projectId));
+  });
+
+  app.post('/v1/retention/preview', async (req, reply) => {
+    const body = RetentionPreviewBody.safeParse(req.body ?? {});
+    if (!body.success)
+      return reply.code(400).send({ error: 'validation', message: body.error.message });
+    const g = await guard(req, reply, 'admin', body.data.projectId);
+    if (!g) return;
+    return reply.send(
+      await retention.preview(g.projectId as string, {
+        ...(body.data.cutoff !== undefined ? { cutoff: body.data.cutoff } : {}),
+        ...(body.data.batchLimit !== undefined ? { batchLimit: body.data.batchLimit } : {}),
+      }),
+    );
+  });
+
+  app.post('/v1/retention/apply', async (req, reply) => {
+    const body = RetentionApplyBody.safeParse(req.body ?? {});
+    if (!body.success)
+      return reply.code(400).send({ error: 'validation', message: body.error.message });
+    const g = await guard(req, reply, 'admin', body.data.projectId);
+    if (!g) return;
+    return reply.send(
+      await retention.apply({
+        ...body.data,
+        projectId: g.projectId as string,
+        policy: validateRetentionPolicy(body.data.policy),
+      }),
+    );
   });
 
   app.get('/v1/handoff/changes', async (req, reply) => {
@@ -632,6 +703,7 @@ export async function createServer(
       cursor,
       logger,
       activeStreams,
+      compactedRanges: (after, before) => retention.ranges(projectId, after, before),
     });
   };
   app.get('/v1/stream', sseRoute('team'));
@@ -1674,6 +1746,9 @@ export async function createServer(
     if (closed) return;
     closed = true;
     await dispatcher?.stop();
+    // Stop partition automation and wait for committed retention transactions
+    // before closing streams, the Fastify app, or the Postgres pool.
+    await retention.stop();
     // Force-end persistent SSE connections so app.close() does not hang.
     for (const cleanup of [...activeStreams]) cleanup();
     activeStreams.clear();

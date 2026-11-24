@@ -8,6 +8,7 @@ import { deriveSessions } from '../lib/sessions.js';
 import {
   str,
   type Bootstrap,
+  type CompactionNotice,
   type ConnectionStatus,
   type DirectoryEntry,
   type Mode,
@@ -58,6 +59,8 @@ export interface StoreState {
   selectedNotificationId: string | null;
   paletteOpen: boolean;
   settingsOpen: boolean;
+  retentionOpen: boolean;
+  compactionNotice: CompactionNotice | null;
   init: () => Promise<void>;
   connectLocal: () => Promise<void>;
   connectTeam: (connection: TeamConnection) => Promise<void>;
@@ -78,9 +81,18 @@ export interface StoreState {
   selectNotification: (id: string | null) => void;
   setPaletteOpen: (open: boolean) => void;
   setSettingsOpen: (open: boolean) => void;
+  setRetentionOpen: (open: boolean) => void;
+  noticeCompaction: (notice: CompactionNotice) => void;
+  clearCompactionNotice: () => void;
 }
 
-const EMPTY_FILTERS: Filters = { category: null, session: null, repo: null, task: null, search: '' };
+const EMPTY_FILTERS: Filters = {
+  category: null,
+  session: null,
+  repo: null,
+  task: null,
+  search: '',
+};
 const seen = new Set<string>();
 let pendingEvents: WeftEvent[] = [];
 let ingestTimer: ReturnType<typeof setTimeout> | null = null;
@@ -109,7 +121,10 @@ function flushPendingEvents(): void {
     const dropped = events.splice(0, events.length - EVENT_CAP);
     for (const event of dropped) seen.delete(event.event_id);
   }
-  if (useStore.getState().mode === 'team' && incoming.some((event) => event.type.startsWith('session.'))) {
+  if (
+    useStore.getState().mode === 'team' &&
+    incoming.some((event) => event.type.startsWith('session.'))
+  ) {
     useStore.setState({ events, cursor, sessions: deriveSessions(events) });
   } else {
     useStore.setState({ events, cursor });
@@ -144,6 +159,8 @@ export const useStore = create<StoreState>((set, get) => ({
   selectedNotificationId: null,
   paletteOpen: false,
   settingsOpen: false,
+  retentionOpen: false,
+  compactionNotice: null,
 
   async init() {
     if (initialized) return;
@@ -159,12 +176,33 @@ export const useStore = create<StoreState>((set, get) => ({
     seen.clear();
     if (refreshTimer) clearInterval(refreshTimer);
     set({
-      mode: 'local', connection: null, bootstrap: null, ready: false, error: null,
-      status: 'connecting', events: [], cursor: 0, sessions: [], tasks: [], repos: [],
-      directory: [], notifications: [], backend: null, listTab: 'sessions',
-      selectedEventId: null, selectedSessionId: null, selectedTaskId: null, selectedNotificationId: null,
+      mode: 'local',
+      connection: null,
+      bootstrap: null,
+      ready: false,
+      error: null,
+      status: 'connecting',
+      events: [],
+      cursor: 0,
+      sessions: [],
+      tasks: [],
+      repos: [],
+      directory: [],
+      notifications: [],
+      backend: null,
+      listTab: 'sessions',
+      selectedEventId: null,
+      selectedSessionId: null,
+      selectedTaskId: null,
+      selectedNotificationId: null,
     });
-    sse = new SseClient({ onEvent: (e) => get().ingest(e), onStatus: (s) => get().setStatus(s) });
+    sse = new SseClient(
+      {
+        onEvent: (e) => get().ingest(e),
+        onStatus: (s) => get().setStatus(s),
+      },
+      { onCompaction: (notice) => get().noticeCompaction(notice) },
+    );
     try {
       const b = await bootstrap();
       set({ bootstrap: b, ready: true, error: null });
@@ -183,10 +221,25 @@ export const useStore = create<StoreState>((set, get) => ({
     if (refreshTimer) clearInterval(refreshTimer);
     saveConnection(connection);
     set({
-      mode: 'team', connection, bootstrap: null, ready: false, error: null,
-      status: 'connecting', events: [], cursor: 0, sessions: [], tasks: [], repos: [],
-      directory: [], notifications: [], backend: null, listTab: 'sessions',
-      selectedEventId: null, selectedSessionId: null, selectedTaskId: null, selectedNotificationId: null,
+      mode: 'team',
+      connection,
+      bootstrap: null,
+      ready: false,
+      error: null,
+      status: 'connecting',
+      events: [],
+      cursor: 0,
+      sessions: [],
+      tasks: [],
+      repos: [],
+      directory: [],
+      notifications: [],
+      backend: null,
+      listTab: 'sessions',
+      selectedEventId: null,
+      selectedSessionId: null,
+      selectedTaskId: null,
+      selectedNotificationId: null,
     });
     const team = teamClient(connection);
     try {
@@ -204,6 +257,7 @@ export const useStore = create<StoreState>((set, get) => ({
           projectId: connection.projectId,
           headers: { authorization: `Bearer ${connection.token}` },
           onResync: () => void get().refreshLists(),
+          onCompaction: (notice) => get().noticeCompaction(notice),
         },
       );
       sse.start(0);
@@ -324,7 +378,12 @@ export const useStore = create<StoreState>((set, get) => ({
   },
 
   selectNotification(selectedNotificationId) {
-    set({ selectedNotificationId, selectedEventId: null, selectedTaskId: null, selectedSessionId: null });
+    set({
+      selectedNotificationId,
+      selectedEventId: null,
+      selectedTaskId: null,
+      selectedSessionId: null,
+    });
   },
 
   setPaletteOpen(paletteOpen) {
@@ -333,6 +392,18 @@ export const useStore = create<StoreState>((set, get) => ({
 
   setSettingsOpen(settingsOpen) {
     set({ settingsOpen });
+  },
+
+  setRetentionOpen(retentionOpen) {
+    set({ retentionOpen });
+  },
+
+  noticeCompaction(notice) {
+    set({ compactionNotice: notice });
+  },
+
+  clearCompactionNotice() {
+    set({ compactionNotice: null });
   },
 }));
 

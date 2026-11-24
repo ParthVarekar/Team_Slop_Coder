@@ -1,7 +1,18 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { openSqlite, migrate, DAEMON_MIGRATIONS, type SqliteDatabase } from '@weft/core';
-import { isCoordinationEvent, type EventEnvelope } from '@weft/protocol';
+import {
+  openSqlite,
+  migrate,
+  DAEMON_MIGRATIONS,
+  jsonPayloadBytes,
+  sha256,
+  splitRetentionRanges,
+  RETENTION_ALLOWLIST,
+  RETENTION_POLICY_VERSION,
+  type RetentionRange,
+  type SqliteDatabase,
+} from '@weft/core';
+import { isCoordinationEvent, ulid, type EventEnvelope } from '@weft/protocol';
 import type { ExtractedEdge, ExtractedSymbol } from './symbols.js';
 
 export type StoredLocalEvent = EventEnvelope & { received_at: string; rowid?: number };
@@ -44,6 +55,15 @@ export interface OutboxRow {
   created_at: string;
   attempts: number;
   last_error: string | null;
+}
+
+export interface OutboxPressure {
+  pending: number;
+  telemetryPending: number;
+  compactableTelemetryPending: number;
+  coordinationPending: number;
+  cap: number | null;
+  backpressure: boolean;
 }
 
 export interface StoredSymbol {
@@ -143,6 +163,43 @@ function insertRows(
   }
 }
 
+/** Cached multi-row insert with SQLite's real fresh-row result, not an estimate. */
+function insertRowsReturningEventIds(
+  db: SqliteDatabase,
+  statements: Map<number, Statement>,
+  rows: unknown[][],
+): Set<string> {
+  const inserted = new Set<string>();
+  for (let offset = 0; offset < rows.length; offset += INSERT_CHUNK_SIZE) {
+    const chunk = rows.slice(offset, offset + INSERT_CHUNK_SIZE);
+    let statement = statements.get(chunk.length);
+    if (!statement) {
+      const placeholders = `(${Array(EVENT_COLUMN_COUNT).fill('?').join(',')})`;
+      statement = db.prepare(
+        `INSERT OR IGNORE INTO events (${EVENT_COLUMNS}) VALUES
+           ${Array(chunk.length).fill(placeholders).join(',')} RETURNING event_id`,
+      );
+      statements.set(chunk.length, statement);
+    }
+    for (const eventId of statement.pluck().all(chunk.flat()) as string[]) inserted.add(eventId);
+  }
+  return inserted;
+}
+
+function receiptEventIds(db: SqliteDatabase, eventIds: readonly string[]): Set<string> {
+  const compacted = new Set<string>();
+  for (let offset = 0; offset < eventIds.length; offset += 500) {
+    const chunk = eventIds.slice(offset, offset + 500);
+    const rows = db
+      .prepare(
+        `SELECT event_id FROM event_receipts WHERE event_id IN (${chunk.map(() => '?').join(',')})`,
+      )
+      .all(chunk) as { event_id: string }[];
+    for (const row of rows) compacted.add(row.event_id);
+  }
+  return compacted;
+}
+
 interface EventRow {
   rowid: number;
   event_id: string;
@@ -187,6 +244,7 @@ export class LocalStore {
   private readonly eventStatements = new Map<number, Statement>();
   private readonly coordinationStatements = new Map<number, Statement>();
   private readonly outboxStatements = new Map<number, Statement>();
+  private lastOutboxCap: number | null = null;
 
   constructor(readonly db: SqliteDatabase) {}
 
@@ -197,28 +255,26 @@ export class LocalStore {
     return new LocalStore(db);
   }
 
-  /** Atomically persist a batch; durable types mirrored to coordination_events. */
+  /** Atomically persist a batch; durable types mirrored even on compacted replay. */
   insertEvents(events: StoredLocalEvent[], teamMode: boolean): void {
     if (events.length === 0) return;
-    const rows = events.map(eventParams);
-    const durableRows = events.flatMap((event, index) =>
-      isCoordinationEvent(event.type) ? [rows[index]!.filter((_, column) => column !== 6)] : [],
-    );
-    const outboxRows = teamMode
-      ? events.map((event) => [
-          event.event_id,
-          isCoordinationEvent(event.type) ? 'coordination' : 'telemetry',
-          JSON.stringify(event),
-          event.received_at,
-        ])
-      : [];
     const tx = this.db.transaction(() => {
-      insertRows(
+      // Receipts outrank hot insertion: a compacted replay must not resurrect
+      // payloads. Coordination mirroring below still runs for durable replays.
+      const compacted = receiptEventIds(
         this.db,
-        this.eventStatements,
-        `INSERT OR IGNORE INTO events (${EVENT_COLUMNS})`,
-        EVENT_COLUMN_COUNT,
-        rows,
+        events.map((event) => event.event_id),
+      );
+      const hotEvents = events.filter((event) => !compacted.has(event.event_id));
+      const hotRows = hotEvents.map(eventParams);
+      const freshIds = insertRowsReturningEventIds(this.db, this.eventStatements, hotRows);
+
+      // Keep the durable coordination mirror idempotent on every replay. This
+      // intentionally does not depend on whether the hot row was fresh.
+      const durableRows = events.flatMap((event) =>
+        isCoordinationEvent(event.type)
+          ? [eventParams(event).filter((_, column) => column !== 6)]
+          : [],
       );
       if (durableRows.length > 0) {
         insertRows(
@@ -231,6 +287,19 @@ export class LocalStore {
           durableRows,
         );
       }
+
+      // Only actual hot inserts enqueue. Replays after ack/drop cannot recreate
+      // outbox rows; the server's receipt dedup remains the replay authority.
+      const outboxRows = teamMode
+        ? events
+            .filter((event) => freshIds.has(event.event_id))
+            .map((event) => [
+              event.event_id,
+              isCoordinationEvent(event.type) ? 'coordination' : 'telemetry',
+              JSON.stringify(event),
+              event.received_at,
+            ])
+        : [];
       if (outboxRows.length > 0) {
         insertRows(
           this.db,
@@ -307,6 +376,32 @@ export class LocalStore {
     return row.c;
   }
 
+  /** Exact durable compaction intervals for API/SSE gap reporting. */
+  getRetentionRanges(projectId?: string, afterRowId = 0): RetentionRange[] {
+    const rows = this.db
+      .prepare(
+        `SELECT run_id, sequence_kind, seq_start, seq_end, summary_event_id
+           FROM retention_ranges
+          WHERE sequence_kind = 'rowid' AND seq_end > ?
+            ${projectId ? 'AND project_id = ?' : ''}
+          ORDER BY seq_start ASC`,
+      )
+      .all(...(projectId ? [afterRowId, projectId] : [afterRowId])) as {
+      run_id: string;
+      sequence_kind: RetentionRange['sequenceKind'];
+      seq_start: number;
+      seq_end: number;
+      summary_event_id: string | null;
+    }[];
+    return rows.map((row) => ({
+      runId: row.run_id,
+      sequenceKind: row.sequence_kind,
+      seqStart: row.seq_start,
+      seqEnd: row.seq_end,
+      summaryEventId: row.summary_event_id,
+    }));
+  }
+
   // --- Outbox (team-mode shipping) -----------------------------------------
 
   /** Oldest unshipped rows first; the shipper drains these in batches. */
@@ -350,24 +445,168 @@ export class LocalStore {
     tx(eventIds);
   }
 
+  outboxPressure(cap: number | null = this.lastOutboxCap): OutboxPressure {
+    const row = this.db
+      .prepare(
+        `SELECT
+           COUNT(*) AS pending,
+           COALESCE(SUM(CASE WHEN kind = 'coordination' THEN 1 ELSE 0 END), 0) AS coordination,
+           COALESCE(SUM(CASE WHEN kind = 'telemetry' THEN 1 ELSE 0 END), 0) AS telemetry,
+           COALESCE(SUM(CASE WHEN kind = 'telemetry' AND
+             json_extract(envelope, '$.type') IN (${RETENTION_ALLOWLIST.map(() => '?').join(',')})
+             THEN 1 ELSE 0 END), 0) AS compactable
+         FROM outbox WHERE shipped_at IS NULL`,
+      )
+      .get(...RETENTION_ALLOWLIST) as {
+      pending: number;
+      coordination: number;
+      telemetry: number;
+      compactable: number;
+    };
+    const remainingAfterAllowlistCompaction =
+      row.pending - Math.min(row.compactable, Math.max(0, row.pending - (cap ?? row.pending)));
+    return {
+      pending: row.pending,
+      telemetryPending: row.telemetry,
+      compactableTelemetryPending: row.compactable,
+      coordinationPending: row.coordination,
+      cap,
+      backpressure: cap !== null && remainingAfterAllowlistCompaction > cap,
+    };
+  }
+
   /**
-   * Bound the pending outbox by compacting the oldest telemetry first.
-   * Coordination rows are NEVER dropped (durable trail). Returns rows removed.
+   * Bound the pending outbox using only the fixed telemetry allowlist. Evidence,
+   * the run, and exact ranges commit atomically before exact-key deletion.
+   * Coordination and unknown rows are never dropped; floor overflow is reported
+   * as backpressure by outboxPressure() rather than hidden by a false success.
    */
   compactOutbox(maxRows: number): number {
-    const pending = this.pendingOutboxCount();
-    const excess = pending - maxRows;
-    if (excess <= 0) return 0;
-    const res = this.db
+    const pressure = this.outboxPressure(maxRows);
+    const excess = pressure.pending - maxRows;
+    if (excess <= 0) {
+      this.lastOutboxCap = maxRows;
+      return 0;
+    }
+    const selected = this.db
       .prepare(
-        `DELETE FROM outbox WHERE outbox_id IN (
-           SELECT outbox_id FROM outbox
-            WHERE shipped_at IS NULL AND kind = 'telemetry'
-            ORDER BY outbox_id ASC LIMIT ?
-         )`,
+        `SELECT outbox_id, event_id, envelope FROM outbox
+          WHERE shipped_at IS NULL AND kind = 'telemetry'
+            AND json_extract(envelope, '$.type') IN (${RETENTION_ALLOWLIST.map(() => '?').join(',')})
+          ORDER BY outbox_id ASC LIMIT ?`,
       )
-      .run(excess);
-    return res.changes;
+      .all(...RETENTION_ALLOWLIST, excess) as {
+      outbox_id: number;
+      event_id: string;
+      envelope: string;
+    }[];
+    if (selected.length === 0) {
+      this.lastOutboxCap = maxRows;
+      return 0;
+    }
+
+    const remove = this.db.transaction(() => {
+      const now = new Date().toISOString();
+      const runId = `ret_${ulid()}`;
+      const parsed = selected.map((row) => JSON.parse(row.envelope) as Record<string, unknown>);
+      const sequences = selected.map((row) => row.outbox_id);
+      const ranges = splitRetentionRanges('outbox_id', sequences);
+      const payloadBytes = parsed.reduce(
+        (total, envelope) => total + jsonPayloadBytes(envelope.payload ?? {}),
+        0,
+      );
+      const fingerprint = sha256(
+        sequences.map((sequence, index) => `${sequence}:${selected[index]!.event_id}`).join(','),
+      );
+      this.db
+        .prepare(
+          `INSERT INTO retention_runs
+             (run_id, project_id, kind, state, policy_json, fingerprint, cutoff, batch_limit,
+              eligible_count, eligible_payload_bytes, selected_count, payload_bytes, range_count,
+              summary_count, started_at, completed_at)
+           VALUES (?, ?, 'outbox_overflow', 'completed', ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+        )
+        .run(
+          runId,
+          String(parsed[0]?.project_id ?? ''),
+          JSON.stringify({
+            version: RETENTION_POLICY_VERSION,
+            kind: 'outbox_overflow',
+            allowlist: RETENTION_ALLOWLIST,
+            batchLimit: selected.length,
+          }),
+          fingerprint,
+          now,
+          selected.length,
+          selected.length,
+          payloadBytes,
+          selected.length,
+          payloadBytes,
+          ranges.length,
+          now,
+          now,
+        );
+      const evidence = this.db.prepare(
+        `INSERT INTO outbox_compactions
+           (run_id, outbox_id, event_id, event_type, payload_bytes, envelope_digest, compacted_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      );
+      const rangeEvidence = this.db.prepare(
+        `INSERT INTO retention_ranges
+           (project_id, run_id, sequence_kind, seq_start, seq_end, summary_event_id,
+            selected_count, payload_bytes, type_counts_json)
+         VALUES (?, ?, 'outbox_id', ?, ?, NULL, ?, ?, ?)`,
+      );
+      for (const [index, row] of selected.entries()) {
+        const envelope = parsed[index]!;
+        evidence.run(
+          runId,
+          row.outbox_id,
+          row.event_id,
+          String(envelope.type),
+          jsonPayloadBytes(envelope.payload ?? {}),
+          sha256(row.envelope),
+          now,
+        );
+      }
+      for (const range of ranges) {
+        const indexes = sequences
+          .map((sequence, index) => ({ sequence, index }))
+          .filter((entry) => entry.sequence >= range.seqStart && entry.sequence <= range.seqEnd)
+          .map((entry) => entry.index);
+        const counts = new Map<string, number>();
+        let bytes = 0;
+        for (const index of indexes) {
+          const envelope = parsed[index]!;
+          const type = String(envelope.type);
+          counts.set(type, (counts.get(type) ?? 0) + 1);
+          bytes += jsonPayloadBytes(envelope.payload ?? {});
+        }
+        rangeEvidence.run(
+          String(parsed[indexes[0]!]?.project_id ?? ''),
+          runId,
+          range.seqStart,
+          range.seqEnd,
+          indexes.length,
+          bytes,
+          JSON.stringify(Object.fromEntries(counts)),
+        );
+      }
+      const placeholders = selected.map(() => '?').join(',');
+      const deleted = this.db
+        .prepare(`DELETE FROM outbox WHERE outbox_id IN (${placeholders})`)
+        .run(sequences).changes;
+      const remaining = this.db
+        .prepare(`SELECT COUNT(*) AS c FROM outbox WHERE outbox_id IN (${placeholders})`)
+        .get(sequences) as { c: number };
+      if (deleted !== selected.length || remaining.c !== 0) {
+        throw new Error('outbox compaction verification failed');
+      }
+      return deleted;
+    });
+    const removed = remove();
+    this.lastOutboxCap = maxRows;
+    return removed;
   }
 
   // --- Sync state (durable cursors / markers) ------------------------------

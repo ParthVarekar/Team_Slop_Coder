@@ -1,6 +1,6 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { Pool } from 'pg';
-import { metrics, type Logger } from '@weft/core';
+import { metrics, type Logger, type RetentionRange } from '@weft/core';
 import type { Actor, StoredEvent } from '@weft/protocol';
 
 const HEARTBEAT_MS = 15_000;
@@ -14,7 +14,14 @@ const COORDINATION_FILTER = COORDINATION_PREFIXES.map((p) => `type LIKE '${p}%'`
 
 const clients = metrics.gauge('weft_server_stream_clients', 'Connected SSE clients');
 const sent = metrics.counter('weft_server_stream_events_sent_total', 'SSE events delivered');
-const resyncs = metrics.counter('weft_server_stream_resync_total', 'Forced resyncs below watermark');
+const resyncs = metrics.counter(
+  'weft_server_stream_resync_total',
+  'Forced resyncs below watermark',
+);
+const compactions = metrics.counter(
+  'weft_server_stream_compacted_total',
+  'Exact retention gap notices sent',
+);
 
 export type Channel = 'team' | 'coordination';
 
@@ -80,7 +87,10 @@ export class StreamHub {
     for (const [projectId, list] of byProject) {
       const entry = this.cache.get(projectId) ?? { frames: new Map<number, string>(), latest: 0 };
       for (const event of list) {
-        entry.frames.set(event.global_seq, `id: ${event.global_seq}\ndata: ${JSON.stringify(event)}\n\n`);
+        entry.frames.set(
+          event.global_seq,
+          `id: ${event.global_seq}\ndata: ${JSON.stringify(event)}\n\n`,
+        );
         entry.latest = Math.max(entry.latest, event.global_seq);
       }
       while (entry.frames.size > FRAME_CACHE_LIMIT) {
@@ -105,6 +115,12 @@ export class StreamHub {
       seq += 1;
     }
     return { frames, complete: seq > entry.latest };
+  }
+
+  /** Drop compacted payloads before waking subscribers to re-read durable state. */
+  invalidate(projectId: string): void {
+    this.cache.delete(projectId);
+    this.notify(projectId);
   }
 
   notify(projectId: string): void {
@@ -144,6 +160,8 @@ export interface StreamOptions {
   /** Resume cursor (global_seq) from Last-Event-ID or ?after. */
   cursor: number;
   logger?: Logger;
+  /** Exact durable range lookup; supplied by the retention service. */
+  compactedRanges?: (after: number, before: number) => Promise<RetentionRange[]>;
   /** Server-tracked cleanups so shutdown can force-end persistent connections. */
   activeStreams?: Set<() => void>;
 }
@@ -180,6 +198,9 @@ export async function streamEvents(
 
   let closed = false;
   let lastSent = opts.cursor;
+  // Resync may move the event cursor forward without concealing compacted
+  // prefixes. Track notice delivery independently so those gaps stay explicit.
+  let lastRangeSent = opts.cursor;
 
   if (channel === 'team') {
     const stream = await pool.query(
@@ -191,7 +212,9 @@ export async function streamEvents(
     const lastSeq = row ? Number(row.last_seq) : 0;
     if (lastSent < minSeq) {
       resyncs.inc();
-      reply.raw.write(`event: resync\ndata: ${JSON.stringify({ min_seq: minSeq, last_seq: lastSeq })}\n\n`);
+      reply.raw.write(
+        `event: resync\ndata: ${JSON.stringify({ min_seq: minSeq, last_seq: lastSeq })}\n\n`,
+      );
       lastSent = Math.max(0, minSeq - 1);
     }
   }
@@ -223,29 +246,79 @@ export async function streamEvents(
       for (;;) {
         queued = false;
         let progressed = false;
-        if (channel === 'team') {
-          const cached = hub.cachedAfter(projectId, lastSent);
-          if (cached.frames.length > 0) {
-            reply.raw.write(cached.frames.join(''));
-            lastSent += cached.frames.length;
-            sent.inc(cached.frames.length);
-            progressed = true;
-          }
-          if (cached.complete && !queued) break;
-        }
-        const rows = await fetchAfter(lastSent);
+        const cached =
+          channel === 'team'
+            ? hub.cachedAfter(projectId, lastSent)
+            : { frames: [], complete: false };
+        const cachedEnd = lastSent + cached.frames.length;
+        const rows = cached.complete && !queued ? [] : await fetchAfter(cachedEnd);
         if (closed) return;
-        if (rows.length > 0) {
-          const frames = rows.map((r) => {
-            const event = mapStoredEvent(r);
-            return `id: ${event.global_seq}\ndata: ${JSON.stringify(event)}\n\n`;
-          });
-          reply.raw.write(frames.join(''));
-          lastSent = Number(rows[rows.length - 1]?.global_seq);
-          sent.inc(rows.length);
-          progressed = true;
+        const batchEnd = rows.length ? Number(rows[rows.length - 1]!.global_seq) : cachedEnd;
+        const ranges =
+          channel === 'team' && opts.compactedRanges
+            ? await opts.compactedRanges(lastRangeSent, batchEnd)
+            : [];
+        let rangeIndex = 0;
+        let compactedThrough = -1;
+        let bufferedFrames: string[] = [];
+        let sentCount = 0;
+        const flushFrames = (): void => {
+          if (bufferedFrames.length === 0) return;
+          reply.raw.write(bufferedFrames.join(''));
+          bufferedFrames = [];
+        };
+        const writeRangesThrough = (sequence: number): boolean => {
+          let compacted = false;
+          while (rangeIndex < ranges.length && ranges[rangeIndex]!.seqStart <= sequence) {
+            if (!compacted) flushFrames();
+            compacted = true;
+            const range = ranges[rangeIndex++]!;
+            reply.raw.write(
+              `event: compacted\ndata: ${JSON.stringify({
+                sequence_kind: 'global_seq',
+                seq_start: range.seqStart,
+                seq_end: range.seqEnd,
+                run_id: range.runId,
+                summary_event_id: range.summaryEventId,
+              })}\n\n`,
+            );
+            compactions.inc();
+            compactedThrough = Math.max(compactedThrough, range.seqEnd);
+          }
+          return sequence <= compactedThrough;
+        };
+        const writeFrame = (sequence: number, frame: string): void => {
+          // A retention commit can race the in-process cache. Exact ranges remain
+          // authoritative: never replay a compacted payload from stale cache.
+          if (!writeRangesThrough(sequence)) {
+            bufferedFrames.push(frame);
+            sentCount += 1;
+          }
+        };
+        let sequence = lastSent + 1;
+        for (const frame of cached.frames) {
+          writeFrame(sequence, frame);
+          lastSent = sequence;
+          sequence += 1;
         }
-        if (rows.length === 0) break;
+        flushFrames();
+        for (const row of rows) {
+          const event = mapStoredEvent(row);
+          writeFrame(
+            event.global_seq,
+            `id: ${event.global_seq}\ndata: ${JSON.stringify(event)}\n\n`,
+          );
+          lastSent = event.global_seq;
+        }
+        writeRangesThrough(batchEnd);
+        flushFrames();
+        if (sentCount > 0) sent.inc(sentCount);
+        lastRangeSent = Math.max(lastRangeSent, batchEnd, ...ranges.map((range) => range.seqEnd));
+        if (cached.frames.length > 0 || rows.length > 0) progressed = true;
+        if (rows.length === 0) {
+          if (queued) continue;
+          break;
+        }
         if (rows.length < DRAIN_LIMIT && !queued && channel !== 'team') break;
         if (!progressed) break;
       }

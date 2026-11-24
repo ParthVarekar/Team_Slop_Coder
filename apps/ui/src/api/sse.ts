@@ -1,4 +1,4 @@
-import type { ConnectionStatus, WeftEvent } from '../lib/types.js';
+import type { CompactionNotice, ConnectionStatus, WeftEvent } from '../lib/types.js';
 import { authHeaders } from './client.js';
 
 export interface SseHandlers {
@@ -15,6 +15,8 @@ export interface SseOptions {
   headers?: Record<string, string>;
   /** Fired when the server forces a resync below the retention watermark. */
   onResync?: (info: { min_seq: number; last_seq: number }) => void;
+  /** Exact durable gap notice; never an ordinary event or a payload recovery claim. */
+  onCompaction?: (notice: CompactionNotice) => void;
 }
 
 const MAX_BACKOFF_MS = 15_000;
@@ -102,10 +104,6 @@ export class SseClient {
         else if (line.startsWith('event:')) name = line.slice(6).trim();
         else if (line.startsWith('data:')) data += line.slice(5).trim();
       }
-      if (id) {
-        const parsed = Number(id);
-        if (Number.isFinite(parsed)) this.cursor = parsed;
-      }
       if (data) {
         try {
           const value = JSON.parse(data) as Record<string, unknown>;
@@ -114,8 +112,36 @@ export class SseClient {
               min_seq: Number(value.min_seq) || 0,
               last_seq: Number(value.last_seq) || 0,
             });
+          } else if (name === 'compacted') {
+            const sequenceKind = value.sequence_kind;
+            const seqStart = Number(value.seq_start);
+            const seqEnd = Number(value.seq_end);
+            if (
+              (sequenceKind === 'rowid' || sequenceKind === 'global_seq') &&
+              Number.isSafeInteger(seqStart) &&
+              Number.isSafeInteger(seqEnd) &&
+              seqStart >= 0 &&
+              seqEnd >= seqStart
+            ) {
+              this.options.onCompaction?.({
+                sequenceKind,
+                seqStart,
+                seqEnd,
+                ...(typeof value.run_id === 'string' ? { runId: value.run_id } : {}),
+                ...(typeof value.summary_event_id === 'string' || value.summary_event_id === null
+                  ? { summaryEventId: value.summary_event_id as string | null }
+                  : {}),
+                receivedAt: Date.now(),
+              });
+            }
           } else {
             this.handlers.onEvent(value as unknown as WeftEvent);
+            // Control frames are not stream events and must never move the
+            // resume cursor, even if a producer accidentally includes an id.
+            if (id) {
+              const parsed = Number(id);
+              if (Number.isFinite(parsed)) this.cursor = parsed;
+            }
           }
         } catch {
           /* ignore malformed frame */

@@ -2,6 +2,9 @@ import type {
   DirectoryEntry,
   Notification,
   NotificationState,
+  RetentionPreview,
+  RetentionResult,
+  RetentionStatus,
   Task,
   TeamConnection,
   WeftEvent,
@@ -64,7 +67,10 @@ export function teamClient(connection: TeamConnection) {
   async function send<T>(method: string, path: string, body?: unknown): Promise<T> {
     const res = await fetch(`${base}${path}`, {
       method,
-      headers: { ...headers, ...(body !== undefined ? { 'content-type': 'application/json' } : {}) },
+      headers: {
+        ...headers,
+        ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
+      },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     });
     if (!res.ok) {
@@ -77,9 +83,18 @@ export function teamClient(connection: TeamConnection) {
   return {
     health: () => get<{ ok: boolean; database: string }>('/healthz'),
     events: (after = 0) =>
-      get<{ events: WeftEvent[]; cursor: { last_seq: number; min_seq: number }; resync: boolean }>(
-        `/v1/events?${project}&afterSeq=${after}&limit=1000`,
-      ),
+      get<{
+        events: WeftEvent[];
+        cursor: { last_seq: number; min_seq: number };
+        resync: boolean;
+        ranges?: {
+          sequenceKind: string;
+          seqStart: number;
+          seqEnd: number;
+          runId?: string;
+          summaryEventId?: string | null;
+        }[];
+      }>(`/v1/events?${project}&afterSeq=${after}&limit=1000`),
     async tasks(): Promise<{ tasks: Task[] }> {
       const r = await get<{ tasks: ServerTask[] }>(`/v1/tasks?${project}`);
       return { tasks: r.tasks.map(mapTask) };
@@ -91,7 +106,12 @@ export function teamClient(connection: TeamConnection) {
       });
       return { task: mapTask(r.task) };
     },
-    async transitionTask(id: string, baseVersion: number, to: string, reason?: string): Promise<{ task: Task }> {
+    async transitionTask(
+      id: string,
+      baseVersion: number,
+      to: string,
+      reason?: string,
+    ): Promise<{ task: Task }> {
       const r = await send<{ task: ServerTask }>('POST', `/v1/tasks/${id}/transition`, {
         projectId: connection.projectId,
         baseVersion,
@@ -110,6 +130,22 @@ export function teamClient(connection: TeamConnection) {
         state,
       }),
     members: () => get<{ members: DirectoryEntry[] }>(`/v1/members?${project}`),
+    retentionStatus: () => get<RetentionStatus>(`/v1/retention/status?${project}`),
+    retentionPreview: (cutoff: string, batchLimit: number) =>
+      send<RetentionPreview>('POST', '/v1/retention/preview', {
+        projectId: connection.projectId,
+        cutoff,
+        batchLimit,
+      }),
+    retentionApply: (preview: RetentionPreview, runId: string) =>
+      send<RetentionResult>('POST', '/v1/retention/apply', {
+        projectId: connection.projectId,
+        runId,
+        fingerprint: preview.fingerprint,
+        cutoff: preview.cutoff,
+        policy: preview.policy,
+        confirm: true,
+      }),
   };
 }
 

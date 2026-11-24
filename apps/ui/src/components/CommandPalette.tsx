@@ -9,7 +9,14 @@ import {
   shortId,
 } from '../lib/format.js';
 import { sessionDeveloperLabel } from '../lib/sessions.js';
-import { InboxIcon, ReposIcon, SearchIcon, SessionsIcon, SettingsIcon, TasksIcon } from './icons.js';
+import {
+  InboxIcon,
+  ReposIcon,
+  SearchIcon,
+  SessionsIcon,
+  SettingsIcon,
+  TasksIcon,
+} from './icons.js';
 
 const ITEM =
   'flex cursor-pointer items-center gap-2.5 rounded-md px-3 py-2 text-[12px] text-fg-muted data-[selected=true]:bg-accent/15 data-[selected=true]:text-fg';
@@ -33,6 +40,7 @@ export function CommandPalette({
   const selectTask = useStore((s) => s.selectTask);
   const selectNotification = useStore((s) => s.selectNotification);
   const setSettingsOpen = useStore((s) => s.setSettingsOpen);
+  const setRetentionOpen = useStore((s) => s.setRetentionOpen);
   const sessions = useStore((s) => s.sessions);
   const tasks = useStore((s) => s.tasks);
   const repos = useStore((s) => s.repos);
@@ -66,7 +74,11 @@ export function CommandPalette({
       <div className="flex items-center gap-2 border-b border-line px-3">
         <SearchIcon size={15} className="text-fg-subtle" />
         <Command.Input
-          placeholder={team ? 'Search commands, sessions, tasks, inbox…' : 'Search commands, sessions, tasks, repos…'}
+          placeholder={
+            team
+              ? 'Search commands, sessions, tasks, inbox…'
+              : 'Search commands, sessions, tasks, repos…'
+          }
           className="w-full bg-transparent py-3 text-[13px] text-fg outline-none placeholder:text-fg-subtle"
         />
       </div>
@@ -83,11 +95,19 @@ export function CommandPalette({
             <TasksIcon size={15} /> Tasks
           </Command.Item>
           {team ? (
-            <Command.Item className={ITEM} value="navigate inbox notifications" onSelect={nav('inbox')}>
+            <Command.Item
+              className={ITEM}
+              value="navigate inbox notifications"
+              onSelect={nav('inbox')}
+            >
               <InboxIcon size={15} /> Inbox
             </Command.Item>
           ) : (
-            <Command.Item className={ITEM} value="navigate repositories repos" onSelect={nav('repos')}>
+            <Command.Item
+              className={ITEM}
+              value="navigate repositories repos"
+              onSelect={nav('repos')}
+            >
               <ReposIcon size={15} /> Repositories
             </Command.Item>
           )}
@@ -108,10 +128,21 @@ export function CommandPalette({
             New task…
           </Command.Item>
           {!team && (
-            <Command.Item className={ITEM} value="register repository add repo" onSelect={nav('repos')}>
+            <Command.Item
+              className={ITEM}
+              value="register repository add repo"
+              onSelect={nav('repos')}
+            >
               Register repository…
             </Command.Item>
           )}
+          <Command.Item
+            className={ITEM}
+            value="retention compaction database storage telemetry"
+            onSelect={run(() => setRetentionOpen(true))}
+          >
+            Retention and compaction…
+          </Command.Item>
           <Command.Item
             className={ITEM}
             value="connection settings team server configure"

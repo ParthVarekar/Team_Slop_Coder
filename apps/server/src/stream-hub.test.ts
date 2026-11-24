@@ -67,4 +67,22 @@ describe('StreamHub committed-frame cache', () => {
     expect(recent.frames[0]).toMatch(/^id: 5002\n/);
     expect(recent.frames[4_999]).toMatch(/^id: 10001\n/);
   });
+
+  it('invalidates compacted frames before waking only that project', () => {
+    const hub = new StreamHub();
+    const projectId = makeId('project');
+    const otherProjectId = makeId('project');
+    hub.publish([event(projectId, 1), event(otherProjectId, 1)]);
+    const wake = vi.fn();
+    const otherWake = vi.fn();
+    hub.subscribe(projectId, wake);
+    hub.subscribe(otherProjectId, otherWake);
+
+    hub.invalidate(projectId);
+
+    expect(hub.cachedAfter(projectId, 0)).toEqual({ frames: [], complete: false });
+    expect(hub.cachedAfter(otherProjectId, 0).frames).toHaveLength(1);
+    expect(wake).toHaveBeenCalledOnce();
+    expect(otherWake).not.toHaveBeenCalled();
+  });
 });

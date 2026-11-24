@@ -28,6 +28,7 @@ beforeEach(() => {
     cursor: 0,
     filters: EMPTY,
     selectedEventId: null,
+    compactionNotice: null,
     selectedSessionId: null,
     selectedTaskId: null,
   });
@@ -80,6 +81,19 @@ describe('store ingest (render-count guarantees)', () => {
     const events = useStore.getState().events;
     expect(events).toHaveLength(5000);
     expect(events.some((e) => e.event_id === firstId)).toBe(false);
+  });
+});
+
+describe('compaction notices', () => {
+  it('records a control notice without ingesting a fake event or moving the cursor', () => {
+    useStore
+      .getState()
+      .noticeCompaction({ sequenceKind: 'rowid', seqStart: 2, seqEnd: 4, receivedAt: 1 });
+    expect(useStore.getState().compactionNotice).toMatchObject({ seqStart: 2, seqEnd: 4 });
+    expect(useStore.getState().events).toEqual([]);
+    expect(useStore.getState().cursor).toBe(0);
+    useStore.getState().clearCompactionNotice();
+    expect(useStore.getState().compactionNotice).toBeNull();
   });
 });
 

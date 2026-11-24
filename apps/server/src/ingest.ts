@@ -1,7 +1,12 @@
 import { createHash } from 'node:crypto';
 import type { Client, Pool } from 'pg';
 import { metrics, type Logger } from '@weft/core';
-import { safeParseEvent, isCoordinationEvent, type EventEnvelope, type StoredEvent } from '@weft/protocol';
+import {
+  safeParseEvent,
+  isCoordinationEvent,
+  type EventEnvelope,
+  type StoredEvent,
+} from '@weft/protocol';
 import { clientExecutor, withTransaction } from './pg.js';
 import { recordAudit } from './audit.js';
 import type { ConflictProjection } from './conflicts-service.js';
@@ -73,10 +78,22 @@ async function insertEvents(client: Client, items: PendingEvent[]): Promise<void
   items.forEach((ne, i) => {
     const e = ne.event;
     values.push(
-      e.event_id, e.v, e.device_id, e.project_id,
-      e.repo_id ?? null, e.session_id ?? null, e.provider_session_id ?? null,
-      e.task_id ?? null, e.seq ?? null, ne.global_seq, e.ts, ne.received_at,
-      e.type, JSON.stringify(e.actor), JSON.stringify(e.payload), e.privacy,
+      e.event_id,
+      e.v,
+      e.device_id,
+      e.project_id,
+      e.repo_id ?? null,
+      e.session_id ?? null,
+      e.provider_session_id ?? null,
+      e.task_id ?? null,
+      e.seq ?? null,
+      ne.global_seq,
+      e.ts,
+      ne.received_at,
+      e.type,
+      JSON.stringify(e.actor),
+      JSON.stringify(e.payload),
+      e.privacy,
     );
     tuples.push(placeholders(EVENT_COLS, i * EVENT_COLS));
   });
@@ -95,9 +112,21 @@ async function insertCoordination(client: Client, items: PendingEvent[]): Promis
   items.forEach((ne, i) => {
     const e = ne.event;
     values.push(
-      e.event_id, e.v, e.device_id, e.project_id, e.repo_id ?? null,
-      e.session_id ?? null, e.task_id ?? null, e.seq ?? null, ne.global_seq,
-      e.ts, ne.received_at, e.type, JSON.stringify(e.actor), JSON.stringify(e.payload), e.privacy,
+      e.event_id,
+      e.v,
+      e.device_id,
+      e.project_id,
+      e.repo_id ?? null,
+      e.session_id ?? null,
+      e.task_id ?? null,
+      e.seq ?? null,
+      ne.global_seq,
+      e.ts,
+      ne.received_at,
+      e.type,
+      JSON.stringify(e.actor),
+      JSON.stringify(e.payload),
+      e.privacy,
     );
     tuples.push(placeholders(COORD_COLS, i * COORD_COLS));
   });
@@ -197,7 +226,11 @@ export class IngestService {
 
     batchMs.observe(performance.now() - start);
     this.logger?.debug(
-      { accepted: result.accepted.length, duplicates: result.duplicates.length, rejected: result.rejected.length },
+      {
+        accepted: result.accepted.length,
+        duplicates: result.duplicates.length,
+        rejected: result.rejected.length,
+      },
       'ingest batch',
     );
     return result;
@@ -218,13 +251,41 @@ export class IngestService {
       [sortedKeys],
     );
 
-    // Bulk existence lookup (uses the unique index prefix on device_id,event_id).
+    // Lock every touched project before duplicate lookup, not merely when a
+    // fresh sequence is reserved. Retention takes the same row lock; without
+    // this pre-lock a replay could observe a hot row, wait behind compaction,
+    // and then resurrect the deleted payload after the receipt was committed.
+    const projectIds = [...new Set(list.map((e) => e.project_id))].sort();
+    await client.query(
+      `INSERT INTO project_stream_seq(project_id) SELECT unnest($1::text[])
+       ON CONFLICT (project_id) DO NOTHING`,
+      [projectIds],
+    );
+    await client.query(
+      `SELECT project_id FROM project_stream_seq
+        WHERE project_id=ANY($1::text[]) ORDER BY project_id FOR UPDATE`,
+      [projectIds],
+    );
+
+    // Durable replay order: hot rows, then receipts retained after compaction,
+    // then the coordination mirror as defense in depth. DISTINCT ON enforces
+    // that order per identity; a replay never consumes a new sequence.
     const existing = new Map<string, IngestedRef>();
     const found = await client.query(
-      `SELECT e.device_id, e.event_id, e.global_seq, e.received_at
-         FROM events e
-         JOIN unnest($1::text[], $2::text[]) AS t(device_id, event_id)
-           ON e.device_id = t.device_id AND e.event_id = t.event_id`,
+      `SELECT DISTINCT ON (d.device_id,d.event_id) d.device_id,d.event_id,d.global_seq,d.received_at
+         FROM (
+           SELECT e.device_id,e.event_id,e.global_seq,e.received_at,1 AS source_rank
+             FROM events e JOIN unnest($1::text[],$2::text[]) AS t(device_id,event_id)
+               ON e.device_id=t.device_id AND e.event_id=t.event_id
+           UNION ALL
+           SELECT r.device_id,r.event_id,r.original_global_seq,r.received_at,2
+             FROM event_receipts r JOIN unnest($1::text[],$2::text[]) AS t(device_id,event_id)
+               ON r.device_id=t.device_id AND r.event_id=t.event_id
+           UNION ALL
+           SELECT c.device_id,c.event_id,c.global_seq,c.received_at,3
+             FROM coordination_events c JOIN unnest($1::text[],$2::text[]) AS t(device_id,event_id)
+               ON c.device_id=t.device_id AND c.event_id=t.event_id
+         ) d ORDER BY d.device_id,d.event_id,d.source_rank`,
       [list.map((e) => e.device_id), list.map((e) => e.event_id)],
     );
     for (const row of found.rows) {
@@ -313,7 +374,6 @@ export class IngestService {
 
     // Report cursors for every project touched (new or replayed).
     const streams: Record<string, StreamCursor> = {};
-    const projectIds = [...new Set(list.map((e) => e.project_id))];
     for (const projectId of projectIds) {
       const res = await client.query(
         'SELECT last_seq, min_seq FROM project_stream_seq WHERE project_id = $1',
