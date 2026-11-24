@@ -211,7 +211,7 @@ async function main() {
   assert.ok(uiP95 <= 100, `event→UI p95 ${uiP95.toFixed(2)}ms exceeds 100ms budget`);
 
   // 8. Perf: idle daemon < 1% CPU / < 150MB RSS.
-  const idleWindowMs = 4000;
+  const idleWindowMs = 10_000;
   const before = sampleProcess(daemon.pid);
   await sleep(idleWindowMs);
   const after = sampleProcess(daemon.pid);

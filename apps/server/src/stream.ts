@@ -76,6 +76,7 @@ export interface CachedFrames {
 export class StreamHub {
   private readonly listeners = new Map<string, Set<() => void>>();
   private readonly cache = new Map<string, FrameCache>();
+  private readonly generations = new Map<string, number>();
 
   publish(events: StoredEvent[]): void {
     const byProject = new Map<string, StoredEvent[]>();
@@ -119,8 +120,13 @@ export class StreamHub {
 
   /** Drop compacted payloads before waking subscribers to re-read durable state. */
   invalidate(projectId: string): void {
+    this.generations.set(projectId, (this.generations.get(projectId) ?? 0) + 1);
     this.cache.delete(projectId);
     this.notify(projectId);
+  }
+
+  generation(projectId: string): number {
+    return this.generations.get(projectId) ?? 0;
   }
 
   notify(projectId: string): void {
@@ -149,6 +155,7 @@ export class StreamHub {
   close(): void {
     this.listeners.clear();
     this.cache.clear();
+    this.generations.clear();
   }
 }
 
@@ -246,6 +253,8 @@ export async function streamEvents(
       for (;;) {
         queued = false;
         let progressed = false;
+        const cacheGeneration = hub.generation(projectId);
+        // Retention can commit during either await; stale snapshots must never reach the wire.
         const cached =
           channel === 'team'
             ? hub.cachedAfter(projectId, lastSent)
@@ -253,11 +262,14 @@ export async function streamEvents(
         const cachedEnd = lastSent + cached.frames.length;
         const rows = cached.complete && !queued ? [] : await fetchAfter(cachedEnd);
         if (closed) return;
+        if (channel === 'team' && hub.generation(projectId) !== cacheGeneration) continue;
         const batchEnd = rows.length ? Number(rows[rows.length - 1]!.global_seq) : cachedEnd;
         const ranges =
           channel === 'team' && opts.compactedRanges
             ? await opts.compactedRanges(lastRangeSent, batchEnd)
             : [];
+        if (closed) return;
+        if (channel === 'team' && hub.generation(projectId) !== cacheGeneration) continue;
         let rangeIndex = 0;
         let compactedThrough = -1;
         let bufferedFrames: string[] = [];

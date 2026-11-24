@@ -33,6 +33,8 @@ interface ParcelModule {
   ): Promise<ParcelSubscription>;
 }
 
+const NATIVE_SAFETY_POLL_MS = 30_000;
+
 /** Native fs hints (best-effort) + a safety poll; git status remains the truth. */
 export class ParcelBackend implements WatchBackend {
   readonly name = 'parcel' as const;
@@ -81,7 +83,8 @@ export async function detectBackend(pollMs: number, logger?: Logger): Promise<Wa
     const mod = (await import(specifier)) as { default?: ParcelModule } & ParcelModule;
     const resolved = mod.default ?? mod;
     if (typeof resolved.subscribe !== 'function') throw new Error('subscribe missing');
-    return new ParcelBackend(resolved, pollMs);
+    // Push hints handle ordinary edits; this slower pass only catches missed notifications.
+    return new ParcelBackend(resolved, Math.max(pollMs, NATIVE_SAFETY_POLL_MS));
   } catch (err) {
     logger?.info({ err }, '@parcel/watcher unavailable; using polling backend');
     return new PollBackend(pollMs);

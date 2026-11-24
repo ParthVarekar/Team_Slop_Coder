@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { FastifyReply, FastifyRequest } from 'fastify';
+import type { Pool } from 'pg';
 import { makeId, ulid, type StoredEvent } from '@weft/protocol';
-import { StreamHub } from './stream.js';
+import { StreamHub, streamEvents } from './stream.js';
 
 function event(projectId: string, globalSeq: number): StoredEvent {
   return {
@@ -80,9 +82,69 @@ describe('StreamHub committed-frame cache', () => {
 
     hub.invalidate(projectId);
 
+    expect(hub.generation(projectId)).toBe(1);
     expect(hub.cachedAfter(projectId, 0)).toEqual({ frames: [], complete: false });
     expect(hub.cachedAfter(otherProjectId, 0).frames).toHaveLength(1);
     expect(wake).toHaveBeenCalledOnce();
     expect(otherWake).not.toHaveBeenCalled();
   });
+});
+
+it('restarts a team drain when retention invalidates its cached snapshot', async () => {
+  const hub = new StreamHub();
+  const projectId = makeId('project');
+  hub.publish([event(projectId, 1)]);
+  const summary = event(projectId, 2);
+  summary.type = 'summary.compacted';
+  summary.payload = { seq_start: 1, seq_end: 1, raw_payload_recoverable: false };
+  const query = vi.fn(async (sql: string, params?: unknown[]) => {
+    if (sql.includes('FROM project_stream_seq')) return { rows: [{ last_seq: 2, min_seq: 0 }] };
+    if (sql.includes('FROM events'))
+      return { rows: Number(params?.[1] ?? 0) < summary.global_seq ? [summary] : [] };
+    throw new Error(`unexpected query: ${sql}`);
+  });
+  const writes: string[] = [];
+  const raw = {
+    writeHead: vi.fn(),
+    write: vi.fn((chunk: string) => writes.push(chunk)),
+    end: vi.fn(),
+    on: vi.fn(),
+  };
+  const reply = { hijack: vi.fn(), getHeaders: () => ({}), raw } as unknown as FastifyReply;
+  const req = { raw: { on: vi.fn() } } as unknown as FastifyRequest;
+  const activeStreams = new Set<() => void>();
+  let rangeReads = 0;
+
+  await streamEvents(req, reply, {
+    pool: { query } as unknown as Pool,
+    hub,
+    projectId,
+    channel: 'team',
+    cursor: 0,
+    activeStreams,
+    compactedRanges: async () => {
+      rangeReads += 1;
+      if (rangeReads === 1) {
+        hub.invalidate(projectId);
+        return [];
+      }
+      if (rangeReads === 2)
+        return [
+          {
+            sequenceKind: 'global_seq' as const,
+            seqStart: 1,
+            seqEnd: 1,
+            runId: ulid(),
+            summaryEventId: summary.event_id,
+          },
+        ];
+      return [];
+    },
+  });
+  for (const cleanup of [...activeStreams]) cleanup();
+
+  const wire = writes.join('');
+  expect(wire).not.toContain('"tool_name":"Read"');
+  expect(wire).toContain('event: compacted');
+  expect(wire).toContain('"type":"summary.compacted"');
 });

@@ -22,7 +22,7 @@ import {
 } from '../lib/types.js';
 
 const EVENT_CAP = 5000;
-const INGEST_BATCH_MS = 50;
+const INGEST_FRAME_FALLBACK_MS = 16;
 const LIST_REFRESH_MS = 4000;
 
 export type ListTab = 'sessions' | 'tasks' | 'repos' | 'inbox';
@@ -96,18 +96,22 @@ const EMPTY_FILTERS: Filters = {
 const seen = new Set<string>();
 let pendingEvents: WeftEvent[] = [];
 let ingestTimer: ReturnType<typeof setTimeout> | null = null;
+let ingestFrame: number | null = null;
 let sse: SseClient | null = null;
 let refreshTimer: ReturnType<typeof setInterval> | null = null;
 let initialized = false;
 
 function resetPendingEvents(): void {
   if (ingestTimer) clearTimeout(ingestTimer);
+  if (ingestFrame !== null) cancelAnimationFrame(ingestFrame);
   ingestTimer = null;
+  ingestFrame = null;
   pendingEvents = [];
 }
 
 function flushPendingEvents(): void {
   ingestTimer = null;
+  ingestFrame = null;
   if (pendingEvents.length === 0) return;
   const incoming = pendingEvents;
   pendingEvents = [];
@@ -277,7 +281,12 @@ export const useStore = create<StoreState>((set, get) => ({
     seen.add(event.event_id);
     pendingEvents.push(event);
     if (pendingEvents.length >= EVENT_CAP) flushPendingEvents();
-    else if (!ingestTimer) ingestTimer = setTimeout(flushPendingEvents, INGEST_BATCH_MS);
+    else if (!ingestTimer && ingestFrame === null) {
+      // One store update per rendered frame bounds flood work without delaying sparse events.
+      if (typeof requestAnimationFrame === 'function')
+        ingestFrame = requestAnimationFrame(flushPendingEvents);
+      else ingestTimer = setTimeout(flushPendingEvents, INGEST_FRAME_FALLBACK_MS);
+    }
   },
 
   setStatus(status) {
