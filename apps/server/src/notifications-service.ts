@@ -4,6 +4,7 @@ import { metrics, redact, type Logger } from '@weft/core';
 import { isSystemActor, type EventEnvelope } from '@weft/protocol';
 import { withTransaction, clientExecutor } from './pg.js';
 import { recordAudit } from './audit.js';
+import { enqueueNotificationDeliveries } from './webhook-service.js';
 import type { Origin } from './tasks-service.js';
 
 const projected = metrics.counter(
@@ -124,8 +125,7 @@ export class NotificationService implements NotificationProjection {
     const kind = str(p['kind']);
     if (!kind) return;
     const userId =
-      strOrNull(p['target_user_id']) ??
-      (isSystemActor(event.actor) ? null : event.actor.user_id);
+      strOrNull(p['target_user_id']) ?? (isSystemActor(event.actor) ? null : event.actor.user_id);
     if (!userId) {
       this.logger?.warn(
         { projectId: event.project_id, eventId: event.event_id },
@@ -139,22 +139,41 @@ export class NotificationService implements NotificationProjection {
       (event.task_id ? 'task' : event.repo_id ? 'repo' : event.session_id ? 'session' : null);
     const subjectId =
       strOrNull(p['subject_id']) ?? event.task_id ?? event.repo_id ?? event.session_id ?? null;
-    await client.query(
+    const title = redact(str(p['title']) || kindLabel(kind));
+    const body = subject ? redact(subject) : null;
+    const inserted = await client.query(
       `INSERT INTO notifications
          (id, user_id, project_id, kind, title, body, subject_type, subject_id, state, created_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'inbox',$9)
-       ON CONFLICT (id) DO NOTHING`,
+       ON CONFLICT (id) DO NOTHING
+       RETURNING id`,
       [
         event.event_id,
         userId,
         event.project_id,
         kind,
-        str(p['title']) || kindLabel(kind),
-        subject ? redact(subject) : null,
+        title,
+        body,
         subjectType,
         subjectId,
         event.ts,
       ],
+    );
+    if (inserted.rowCount === 0) return;
+    // The inbox card and successfully enqueued outbox rows share the ingest
+    // transaction. Per-webhook savepoints isolate enqueue failures; transport is
+    // woken only after commit and can never roll the event back.
+    await enqueueNotificationDeliveries(
+      client,
+      event,
+      {
+        id: event.event_id,
+        kind,
+        title,
+        body,
+        user_id: userId,
+      },
+      this.logger,
     );
     projected.inc();
     await recordAudit(clientExecutor(client), {
@@ -178,7 +197,10 @@ export class NotificationService implements NotificationProjection {
     return res.rows[0] ? rowToNotification(res.rows[0]) : undefined;
   }
 
-  async list(projectId: string, options: NotificationListOptions = {}): Promise<NotificationSnapshot[]> {
+  async list(
+    projectId: string,
+    options: NotificationListOptions = {},
+  ): Promise<NotificationSnapshot[]> {
     const params: unknown[] = [projectId];
     let where = 'project_id = $1';
     if (options.userId) {

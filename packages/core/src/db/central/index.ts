@@ -6,6 +6,7 @@ import { centralNotificationsMigration } from './0004_notifications.js';
 import { centralReservationLeaseMigration } from './0005_reservation_lease.js';
 import { centralMergeQueueMigration } from './0006_merge_queue.js';
 import { centralHealthMigration } from './0007_health.js';
+import { centralWebhooksMigration } from './0008_webhooks.js';
 
 /** Server-central Postgres migrations, applied in lexical order. */
 export const SERVER_MIGRATIONS: PgMigration[] = [
@@ -16,4 +17,5 @@ export const SERVER_MIGRATIONS: PgMigration[] = [
   centralReservationLeaseMigration,
   centralMergeQueueMigration,
   centralHealthMigration,
+  centralWebhooksMigration,
 ];

@@ -306,9 +306,12 @@ const HealthRegressionPayload = obj({
   failure_fingerprint: z.string().min(1),
   suspected_changes: z.array(z.record(z.unknown())),
 });
-const NotificationCreatedPayload = obj({
+export const NotificationCreatedPayload = obj({
   kind: z.string().min(1),
+  title: z.string().optional(),
   subject: z.string().optional(),
+  subject_type: z.string().optional(),
+  subject_id: z.string().optional(),
   target_user_id: z.string().optional(),
 });
 

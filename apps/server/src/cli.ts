@@ -60,7 +60,9 @@ function resolveConfig(flags: Record<string, string>): ServerConfig {
       ? (file as Record<string, unknown>)
       : {};
   const base = loadServerConfig({ file: mergeConfig(fileObj, overrides) });
-  return ServerConfigSchema.parse(mergeConfig(base as unknown as Record<string, unknown>, overrides));
+  return ServerConfigSchema.parse(
+    mergeConfig(base as unknown as Record<string, unknown>, overrides),
+  );
 }
 
 // status/stop only need the endpoint + data dir, not a database URL.
@@ -115,6 +117,13 @@ Flags:
 Environment:
   WEFT_DATABASE_URL, WEFT_SERVER_HOST, WEFT_SERVER_PORT,
   WEFT_SERVER_DATA_DIR, WEFT_LOG_LEVEL, WEFT_SERVER_CORS_ORIGIN
+  WEFT_SERVER_WEBHOOKS_ENABLED, WEFT_SERVER_WEBHOOK_MASTER_KEY,
+  WEFT_SERVER_WEBHOOK_POLL_INTERVAL_MS, WEFT_SERVER_WEBHOOK_TIMEOUT_MS,
+  WEFT_SERVER_WEBHOOK_CONCURRENCY, WEFT_SERVER_WEBHOOK_BACKOFF_BASE_MS,
+  WEFT_SERVER_WEBHOOK_BACKOFF_CAP_MS, WEFT_SERVER_WEBHOOK_MAX_ATTEMPTS,
+  WEFT_SERVER_WEBHOOK_MAX_DELIVERY_AGE_MS, WEFT_SERVER_WEBHOOK_RESPONSE_CAP_BYTES,
+  WEFT_SERVER_WEBHOOK_ALLOW_PRIVATE_ENDPOINTS
+  The webhook master key is environment-only (32-byte hex or base64).
 `;
 
 async function start(flags: Record<string, string>): Promise<void> {

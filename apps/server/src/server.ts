@@ -61,7 +61,16 @@ import {
   NotificationError,
   NotificationStateSchema,
 } from './notifications-service.js';
-import type { ServerConfig } from './config.js';
+import { resolveWebhookConfig, type ServerConfig } from './config.js';
+import { parseWebhookMasterKey } from './webhook-crypto.js';
+import { WebhookDispatcher } from './webhook-dispatcher.js';
+import {
+  CreateWebhookBodySchema,
+  UpdateWebhookBodySchema,
+  WebhookError,
+  WebhookService,
+} from './webhook-service.js';
+import type { WebhookTransport } from './webhook-transport.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -195,6 +204,11 @@ const NotificationStateBody = z.object({
   projectId: z.string().min(1).optional(),
   state: NotificationStateSchema,
 });
+const WebhooksQuery = z.object({
+  projectId: z.string().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(1000).default(200),
+});
+const WebhookDeliveriesQuery = WebhooksQuery;
 const MembersQuery = z.object({ projectId: z.string().min(1).optional() });
 const ProjectBody = z.object({ projectId: z.string().min(1).optional() });
 const EnqueueMergeBody = EnqueueMergeSchema.extend({ projectId: z.string().min(1).optional() });
@@ -279,6 +293,8 @@ export interface CreateServerOptions {
   adminSecret?: string;
   /** Invoked after an authenticated POST /v1/shutdown is acknowledged. */
   onShutdown?: () => void;
+  /** Test/integrator transport; production uses the SSRF-safe HTTPS transport. */
+  webhookTransport?: WebhookTransport;
 }
 
 /**
@@ -291,6 +307,11 @@ export async function createServer(
   options: CreateServerOptions = {},
 ): Promise<TeamServer> {
   const logger = options.logger ?? createLogger({ level: config.logLevel, name: 'weft-server' });
+  const webhookConfig = resolveWebhookConfig(config);
+  const webhookMasterKey =
+    webhookConfig.masterKey === undefined
+      ? undefined
+      : parseWebhookMasterKey(webhookConfig.masterKey);
   const db = await openCentralDatabase(config.databaseUrl, logger);
   const app = Fastify({ logger: false, bodyLimit: 1_048_576 });
   // The browser UI calls this API cross-origin with a Bearer token (no cookies),
@@ -314,6 +335,25 @@ export async function createServer(
   const reservations = new ReservationService(db.pool, serverDeviceId, logger);
   const validation = new ValidationService(db.pool, logger);
   const notifications = new NotificationService(db.pool, logger);
+  const webhooks = new WebhookService(
+    db.pool,
+    webhookMasterKey,
+    webhookConfig.allowPrivateEndpoints,
+  );
+  const dispatcher =
+    webhookConfig.enabled && webhookMasterKey
+      ? new WebhookDispatcher({
+          pool: db.pool,
+          config: webhookConfig,
+          masterKey: webhookMasterKey,
+          logger,
+          ...(options.webhookTransport ? { transport: options.webhookTransport } : {}),
+        })
+      : undefined;
+  if (dispatcher)
+    app.addHook('onClose', async () => {
+      await dispatcher.stop();
+    });
   const ingest = new IngestService(db.pool, logger, conflicts, validation, notifications);
   const tasks = new TaskService(db.pool, logger);
   const mergeQueue = new MergeQueueService(db.pool, serverDeviceId, logger);
@@ -353,6 +393,10 @@ export async function createServer(
     }
     if (err instanceof NotificationError) {
       const status = err.code === 'not_found' ? 404 : 400;
+      return reply.code(status).send({ error: err.code, message: err.message });
+    }
+    if (err instanceof WebhookError) {
+      const status = err.code === 'not_found' ? 404 : err.code === 'configuration' ? 503 : 400;
       return reply.code(status).send({ error: err.code, message: err.message });
     }
     if (err instanceof MergeQueueError) {
@@ -492,8 +536,11 @@ export async function createServer(
       }
     }
     const result = await ingest.ingestBatch(parsed.data.events);
-    // Wake SSE subscribers after the batch is durably committed.
-    if (result.accepted.length > 0) hub.notifyMany(Object.keys(result.streams));
+    // Wake subscribers only after the batch (including outbox rows) commits.
+    if (result.accepted.length > 0) {
+      hub.notifyMany(Object.keys(result.streams));
+      dispatcher?.notify();
+    }
     return reply.code(202).send(result);
   });
 
@@ -1437,6 +1484,116 @@ export async function createServer(
   });
 
   // --- Management (admin scope; bootstrap superuser or project admin token) ---
+  app.post('/v1/admin/webhooks', async (req, reply) => {
+    const body = CreateWebhookBodySchema.safeParse(req.body);
+    if (!body.success)
+      return reply.code(400).send({ error: 'validation', message: body.error.message });
+    const g = await guard(req, reply, 'admin', body.data.projectId);
+    if (!g) return;
+    if (!g.projectId)
+      return reply.code(400).send({ error: 'validation', message: 'projectId is required' });
+    const created = await webhooks.create(
+      g.projectId,
+      body.data,
+      actorOf(g.ctx),
+      g.ctx.userId ?? g.ctx.tokenId,
+    );
+    return reply.code(201).send(created);
+  });
+
+  app.get('/v1/admin/webhooks', async (req, reply) => {
+    const query = WebhooksQuery.safeParse(req.query);
+    if (!query.success)
+      return reply.code(400).send({ error: 'validation', message: query.error.message });
+    const g = await guard(req, reply, 'admin', query.data.projectId);
+    if (!g) return;
+    if (!g.projectId)
+      return reply.code(400).send({ error: 'validation', message: 'projectId is required' });
+    return reply.send({ webhooks: await webhooks.list(g.projectId, query.data.limit) });
+  });
+
+  app.get('/v1/admin/webhooks/:id', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const query = WebhooksQuery.safeParse(req.query);
+    if (!query.success)
+      return reply.code(400).send({ error: 'validation', message: query.error.message });
+    const g = await guard(req, reply, 'admin', query.data.projectId);
+    if (!g) return;
+    if (!g.projectId)
+      return reply.code(400).send({ error: 'validation', message: 'projectId is required' });
+    const webhook = await webhooks.get(id, g.projectId);
+    if (!webhook) return reply.code(404).send({ error: 'not_found', message: 'webhook not found' });
+    return reply.send({ webhook });
+  });
+
+  app.patch('/v1/admin/webhooks/:id', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = UpdateWebhookBodySchema.safeParse(req.body);
+    if (!body.success)
+      return reply.code(400).send({ error: 'validation', message: body.error.message });
+    const g = await guard(req, reply, 'admin', body.data.projectId);
+    if (!g) return;
+    if (!g.projectId)
+      return reply.code(400).send({ error: 'validation', message: 'projectId is required' });
+    const webhook = await webhooks.update(id, g.projectId, body.data, actorOf(g.ctx));
+    return reply.send({ webhook });
+  });
+
+  app.post('/v1/admin/webhooks/:id/rotate', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const query = WebhooksQuery.safeParse(req.query);
+    if (!query.success)
+      return reply.code(400).send({ error: 'validation', message: query.error.message });
+    const g = await guard(req, reply, 'admin', query.data.projectId);
+    if (!g) return;
+    if (!g.projectId)
+      return reply.code(400).send({ error: 'validation', message: 'projectId is required' });
+    const rotated = await webhooks.rotate(id, g.projectId, actorOf(g.ctx));
+    return reply.send(rotated);
+  });
+
+  app.delete('/v1/admin/webhooks/:id', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const query = WebhooksQuery.safeParse(req.query);
+    if (!query.success)
+      return reply.code(400).send({ error: 'validation', message: query.error.message });
+    const g = await guard(req, reply, 'admin', query.data.projectId);
+    if (!g) return;
+    if (!g.projectId)
+      return reply.code(400).send({ error: 'validation', message: 'projectId is required' });
+    await webhooks.revoke(id, g.projectId, actorOf(g.ctx));
+    return reply.send({ ok: true, id });
+  });
+
+  app.get('/v1/admin/webhooks/:id/deliveries', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const query = WebhookDeliveriesQuery.safeParse(req.query);
+    if (!query.success)
+      return reply.code(400).send({ error: 'validation', message: query.error.message });
+    const g = await guard(req, reply, 'admin', query.data.projectId);
+    if (!g) return;
+    if (!g.projectId)
+      return reply.code(400).send({ error: 'validation', message: 'projectId is required' });
+    return reply.send({
+      deliveries: await webhooks.listDeliveries(id, g.projectId, query.data.limit),
+    });
+  });
+
+  app.get('/v1/admin/webhook-deliveries/:deliveryId', async (req, reply) => {
+    const { deliveryId } = req.params as { deliveryId: string };
+    const query = WebhooksQuery.safeParse(req.query);
+    if (!query.success)
+      return reply.code(400).send({ error: 'validation', message: query.error.message });
+    const g = await guard(req, reply, 'admin', query.data.projectId);
+    if (!g) return;
+    if (!g.projectId)
+      return reply.code(400).send({ error: 'validation', message: 'projectId is required' });
+    const result = await webhooks.getDelivery(deliveryId, g.projectId);
+    if (!result)
+      return reply.code(404).send({ error: 'not_found', message: 'webhook delivery not found' });
+    return reply.send(result);
+  });
+
   app.post('/v1/admin/tokens', async (req, reply) => {
     const body = IssueTokenBody.safeParse(req.body);
     if (!body.success)
@@ -1513,6 +1670,8 @@ export async function createServer(
   const close = async (): Promise<void> => {
     if (closed) return;
     closed = true;
+    // Stop claims and await active HTTP work before the Fastify/Postgres close.
+    await dispatcher?.stop();
     // Force-end persistent SSE connections so app.close() does not hang.
     for (const cleanup of [...activeStreams]) cleanup();
     activeStreams.clear();
@@ -1529,6 +1688,7 @@ export async function createServer(
     app,
     async listen() {
       const address = await app.listen({ host: config.host, port: config.port });
+      dispatcher?.start();
       logger.info({ address, pid: process.pid }, 'weft server listening');
       return address;
     },
