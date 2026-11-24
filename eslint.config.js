@@ -42,9 +42,9 @@ export default tseslint.config(
     },
   },
   {
-    // Self-contained Node E2E runners; UI waitForFunction callbacks also run in
-    // a browser context, so both node and browser globals are in scope.
-    files: ['**/e2e/**/*.mjs'],
+    // Self-contained Node E2E/packaging scripts; UI waitForFunction callbacks
+    // also run in a browser context, so node and browser globals are in scope.
+    files: ['**/e2e/**/*.mjs', 'scripts/**/*.mjs'],
     languageOptions: {
       globals: {
         process: 'readonly',
@@ -53,6 +53,11 @@ export default tseslint.config(
         performance: 'readonly',
         setTimeout: 'readonly',
         document: 'readonly',
+        AbortController: 'readonly',
+        TextDecoder: 'readonly',
+        WebSocket: 'readonly',
+        PerformanceObserver: 'readonly',
+        requestAnimationFrame: 'readonly',
       },
     },
     rules: {

@@ -1,9 +1,11 @@
 {
   "name": "@weft/daemon",
   "version": "0.0.0",
-  "private": true,
   "type": "module",
-  "description": "Weft local daemon — collection, redaction, indexing, worktrees, validation, local UI.",
+  "description": "Weft local daemon — collection, redaction, indexing, worktrees, validation, and local API.",
+  "engines": {
+    "node": ">=24"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
