@@ -104,7 +104,10 @@ export class DaemonMcpBackend implements McpBackend {
   }
 
   private agentActor(): Actor {
-    return { user_id: this.daemon.identity.user_id, agent: { provider: 'mcp', adapter: 'weft-mcp' } };
+    return {
+      user_id: this.daemon.identity.user_id,
+      agent: { provider: 'mcp', adapter: 'weft-mcp' },
+    };
   }
 
   async getTask(taskId: string): Promise<McpGetTaskResult> {
@@ -112,7 +115,12 @@ export class DaemonMcpBackend implements McpBackend {
       if (this.rpc) {
         try {
           const s = await this.rpc.getTask(taskId);
-          if (s) return { task: snapshotToView(s), source: 'server', stale: this.daemon.taskCache?.isStale() ?? false };
+          if (s)
+            return {
+              task: snapshotToView(s),
+              source: 'server',
+              stale: this.daemon.taskCache?.isStale() ?? false,
+            };
         } catch {
           /* server unreachable; fall back to the last-known projection */
         }
@@ -125,7 +133,10 @@ export class DaemonMcpBackend implements McpBackend {
     return { task: rec ? recordToView(rec) : null, source: 'local', stale: false };
   }
 
-  async claimTask(taskId: string, opts: { baseVersion?: number; provisional?: boolean }): Promise<McpClaimResult> {
+  async claimTask(
+    taskId: string,
+    opts: { baseVersion?: number; provisional?: boolean },
+  ): Promise<McpClaimResult> {
     const provisional = opts.provisional ?? false;
     if (this.team) {
       if (!this.rpc) throw new Error('claim_task requires a configured team server');
@@ -135,22 +146,47 @@ export class DaemonMcpBackend implements McpBackend {
         provisional,
       });
       if (result.ok) {
-        return { ok: true, task_id: taskId, version: result.snapshot.version, provisional: result.provisional, state: result.snapshot.state };
+        return {
+          ok: true,
+          task_id: taskId,
+          version: result.snapshot.version,
+          provisional: result.provisional,
+          state: result.snapshot.state,
+        };
       }
-      return { ok: false, task_id: taskId, version: result.version, provisional, reason: result.reason, winner_claimant: result.winner_claimant };
+      return {
+        ok: false,
+        task_id: taskId,
+        version: result.version,
+        provisional,
+        reason: result.reason,
+        winner_claimant: result.winner_claimant,
+      };
     }
     const rec = this.daemon.tasks.getTask(taskId);
-    if (!rec) return { ok: false, task_id: taskId, version: 0, provisional, reason: 'task not found' };
+    if (!rec)
+      return { ok: false, task_id: taskId, version: 0, provisional, reason: 'task not found' };
     try {
       const next = this.daemon.tasks.transition(taskId, opts.baseVersion ?? rec.version, 'claimed');
       return { ok: true, task_id: taskId, version: next.version, provisional, state: next.state };
     } catch (err) {
-      if (err instanceof TaskError) return { ok: false, task_id: taskId, version: rec.version, provisional, reason: err.message };
+      if (err instanceof TaskError)
+        return {
+          ok: false,
+          task_id: taskId,
+          version: rec.version,
+          provisional,
+          reason: err.message,
+        };
       throw err;
     }
   }
 
-  async reportProgress(taskId: string, note: string, opts: { percent?: number }): Promise<McpProgressResult> {
+  async reportProgress(
+    taskId: string,
+    note: string,
+    opts: { percent?: number },
+  ): Promise<McpProgressResult> {
     const percent = opts.percent ?? null;
     this.daemon.pipeline.enqueue(
       draftEvent(this.daemon.source, {
@@ -164,7 +200,10 @@ export class DaemonMcpBackend implements McpBackend {
     return { ok: true, task_id: taskId, percent, recorded: 'event' };
   }
 
-  async getConcurrentChanges(taskId: string, opts: { budgetBytes?: number }): Promise<ContextPayload> {
+  async getConcurrentChanges(
+    taskId: string,
+    opts: { budgetBytes?: number },
+  ): Promise<ContextPayload> {
     const { task, stale } = await this.contextTask(taskId);
     const repoId = task?.repo_id ?? null;
     const repoFilter = repoId ?? undefined;
@@ -182,13 +221,17 @@ export class DaemonMcpBackend implements McpBackend {
           }))
       : [];
 
-    const conflicts: ContextConflict[] = (this.changeCache?.openConflicts(repoFilter) ?? []).map((c) => ({
-      canonical_key: c.canonical_key,
-      kind: c.kind,
-      severity: c.severity,
-      paths: c.paths,
-    }));
+    const conflicts: ContextConflict[] = (this.changeCache?.openConflicts(repoFilter) ?? []).map(
+      (c) => ({
+        canonical_key: c.canonical_key,
+        kind: c.kind,
+        severity: c.severity,
+        paths: c.paths,
+      }),
+    );
     const progress = this.changeCache?.progressFor(taskId);
+    const now = Date.now();
+    const handoff = await this.daemon.handoff.get(taskId, { now }).catch(() => null);
 
     return assembleContext(
       {
@@ -198,7 +241,20 @@ export class DaemonMcpBackend implements McpBackend {
         overlaps: this.changeCache?.overlapsFor(taskId, repoFilter) ?? [],
         conflicts,
         progress: progress ? [progress] : [],
+        ...(handoff
+          ? {
+              handoff: {
+                as_of: handoff.bundle.as_of,
+                digest: handoff.bundle.digest,
+                task_source: handoff.bundle.coverage.task,
+                changes_source: handoff.bundle.coverage.changes,
+                latest_validation: handoff.bundle.validation[0]?.state ?? 'none',
+                recent_changes: handoff.bundle.recent_changes.length,
+              },
+            }
+          : {}),
         stale,
+        now,
       },
       { ...(opts.budgetBytes != null ? { budgetBytes: opts.budgetBytes } : {}) },
     );
@@ -207,11 +263,19 @@ export class DaemonMcpBackend implements McpBackend {
   private async contextTask(taskId: string): Promise<{ task: ContextTask | null; stale: boolean }> {
     if (this.team) {
       const cached = this.daemon.taskCache?.getTask(taskId);
-      if (cached) return { task: viewToContextTask(snapshotToView(cached)), stale: this.daemon.taskCache?.isStale() ?? true };
+      if (cached)
+        return {
+          task: viewToContextTask(snapshotToView(cached)),
+          stale: this.daemon.taskCache?.isStale() ?? true,
+        };
       if (this.rpc) {
         try {
           const s = await this.rpc.getTask(taskId);
-          if (s) return { task: viewToContextTask(snapshotToView(s)), stale: this.daemon.taskCache?.isStale() ?? true };
+          if (s)
+            return {
+              task: viewToContextTask(snapshotToView(s)),
+              stale: this.daemon.taskCache?.isStale() ?? true,
+            };
         } catch {
           /* fall through to empty context */
         }
@@ -240,7 +304,8 @@ export class DaemonMcpBackend implements McpBackend {
     const ttl = input.ttl_ms ?? DEFAULT_LEASE_TTL_MS;
     const now = Date.now();
     const expiresAt = new Date(now + ttl).toISOString();
-    const graceUntil = mode === 'hard' ? new Date(now + ttl + DEFAULT_LEASE_GRACE_MS).toISOString() : null;
+    const graceUntil =
+      mode === 'hard' ? new Date(now + ttl + DEFAULT_LEASE_GRACE_MS).toISOString() : null;
     const reservationId = makeId('reservation');
     this.daemon.pipeline.enqueue(
       draftEvent(this.daemon.source, {
@@ -263,11 +328,22 @@ export class DaemonMcpBackend implements McpBackend {
         },
       }),
     );
-    return { status: 'local', reservation_id: reservationId, path_glob: input.path_glob, mode, expires_at: expiresAt, grace_until: graceUntil };
+    return {
+      status: 'local',
+      reservation_id: reservationId,
+      path_glob: input.path_glob,
+      mode,
+      expires_at: expiresAt,
+      grace_until: graceUntil,
+    };
   }
 }
 
-function acquireToResult(result: RpcAcquireResult, pathGlob: string, mode: 'soft' | 'hard'): McpReserveResult {
+function acquireToResult(
+  result: RpcAcquireResult,
+  pathGlob: string,
+  mode: 'soft' | 'hard',
+): McpReserveResult {
   const r = result.reservation;
   return {
     status: result.status,

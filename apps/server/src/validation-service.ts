@@ -65,6 +65,7 @@ export interface ValidationListOptions {
   repoId?: string;
   taskId?: string;
   state?: ValidationRunState;
+  until?: string;
   limit?: number;
 }
 
@@ -170,7 +171,8 @@ export class ValidationService implements ValidationProjection {
   async project(client: Client, event: EventEnvelope): Promise<void> {
     const t = event.type;
     if (t === 'task.completion_claimed') return this.projectClaim(client, event);
-    if (t !== 'validation.started' && t !== 'check.completed' && t !== 'validation.completed') return;
+    if (t !== 'validation.started' && t !== 'check.completed' && t !== 'validation.completed')
+      return;
     if (!(await this.projectExists(client, event.project_id))) {
       this.logger?.warn(
         { projectId: event.project_id, type: t, eventId: event.event_id },
@@ -337,7 +339,10 @@ export class ValidationService implements ValidationProjection {
     return rowToRun(row, await this.checksFor(runId));
   }
 
-  async listRuns(projectId: string, options: ValidationListOptions = {}): Promise<ValidationRunSnapshot[]> {
+  async listRuns(
+    projectId: string,
+    options: ValidationListOptions = {},
+  ): Promise<ValidationRunSnapshot[]> {
     const params: unknown[] = [projectId];
     let where = 'project_id = $1';
     if (options.repoId) {
@@ -351,6 +356,10 @@ export class ValidationService implements ValidationProjection {
     if (options.state) {
       params.push(options.state);
       where += ` AND state = $${params.length}`;
+    }
+    if (options.until) {
+      params.push(options.until);
+      where += ` AND date_trunc('milliseconds', started_at) <= $${params.length}`;
     }
     params.push(options.limit ?? 200);
     const res = await this.pool.query(

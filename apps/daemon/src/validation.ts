@@ -152,7 +152,12 @@ interface RunContext {
 /** Default toolchain identity: node version + the exact check commands. */
 function defaultFingerprint(checks: ValidationConfig['checks']): string {
   return createHash('sha256')
-    .update(JSON.stringify({ node: process.version, commands: checks.map((c) => [c.command, ...c.args]) }))
+    .update(
+      JSON.stringify({
+        node: process.version,
+        commands: checks.map((c) => [c.command, ...c.args]),
+      }),
+    )
     .digest('hex')
     .slice(0, 32);
 }
@@ -231,11 +236,17 @@ export class ValidationSupervisor {
     if (!repo) throw new ValidationRunError('not_found', `unknown repo: ${repoId}`);
     const checks = this.options.validation.checks;
     if (checks.length === 0)
-      throw new ValidationRunError('not_configured', 'no validation checks configured for this project');
+      throw new ValidationRunError(
+        'not_configured',
+        'no validation checks configured for this project',
+      );
     const candidateRef = input.candidate ?? 'HEAD';
     const candidateOid = await revParse(repo.root_path, candidateRef, this.binary);
     if (!candidateOid)
-      throw new ValidationRunError('invalid_candidate', `candidate not resolvable: ${candidateRef}`);
+      throw new ValidationRunError(
+        'invalid_candidate',
+        `candidate not resolvable: ${candidateRef}`,
+      );
 
     const release = await this.semaphore.acquire();
     activeGauge.add(1);
@@ -326,7 +337,19 @@ export class ValidationSupervisor {
     if (cached) {
       for (const ev of cached.checks) this.persistCheck(repo, runId, taskId, ev);
       return this.finishRun(
-        { repo, runId, candidateOid, tree, taskId, trigger, startedAt, runnerDevice, claimantDevice, independence, inputHash },
+        {
+          repo,
+          runId,
+          candidateOid,
+          tree,
+          taskId,
+          trigger,
+          startedAt,
+          runnerDevice,
+          claimantDevice,
+          independence,
+          inputHash,
+        },
         'passed',
         cached.checks,
         true,
@@ -403,7 +426,19 @@ export class ValidationSupervisor {
       }
     }
     return this.finishRun(
-      { repo, runId, candidateOid, tree, taskId, trigger, startedAt, runnerDevice, claimantDevice, independence, inputHash },
+      {
+        repo,
+        runId,
+        candidateOid,
+        tree,
+        taskId,
+        trigger,
+        startedAt,
+        runnerDevice,
+        claimantDevice,
+        independence,
+        inputHash,
+      },
       state,
       evidence,
       false,
@@ -411,7 +446,12 @@ export class ValidationSupervisor {
     );
   }
 
-  private persistCheck(repo: RepoRecord, runId: string, taskId: string | undefined, ev: CheckEvidence): void {
+  private persistCheck(
+    repo: RepoRecord,
+    runId: string,
+    taskId: string | undefined,
+    ev: CheckEvidence,
+  ): void {
     this.db
       .prepare(
         `INSERT INTO check_results
@@ -452,10 +492,24 @@ export class ValidationSupervisor {
     cacheHit: boolean,
     cacheExpiresAt: string | null,
   ): ValidationRunRecord {
-    const { repo, runId, candidateOid, tree, taskId, trigger, startedAt, runnerDevice, claimantDevice, independence, inputHash } = ctx;
+    const {
+      repo,
+      runId,
+      candidateOid,
+      tree,
+      taskId,
+      trigger,
+      startedAt,
+      runnerDevice,
+      claimantDevice,
+      independence,
+      inputHash,
+    } = ctx;
     const finishedAt = new Date().toISOString();
     this.db
-      .prepare('UPDATE validation_runs SET state = ?, finished_at = ?, cache_hit = ?, cache_expires_at = ? WHERE run_id = ?')
+      .prepare(
+        'UPDATE validation_runs SET state = ?, finished_at = ?, cache_hit = ?, cache_expires_at = ? WHERE run_id = ?',
+      )
       .run(state, finishedAt, cacheHit ? 1 : 0, cacheExpiresAt, runId);
     if (state === 'passed') runsPassed.inc();
     else if (state === 'failed') runsFailed.inc();
@@ -503,8 +557,7 @@ export class ValidationSupervisor {
 
   getRun(runId: string): ValidationRunRecord | undefined {
     const row = this.db.prepare('SELECT * FROM validation_runs WHERE run_id = ?').get(runId) as
-      | RunRow
-      | undefined;
+      RunRow | undefined;
     if (!row) return undefined;
     const checks = this.db
       .prepare('SELECT * FROM check_results WHERE validation_run_id = ? ORDER BY id ASC')
@@ -512,9 +565,14 @@ export class ValidationSupervisor {
     return this.toRecord(row, checks.map(toCheck));
   }
 
-  listRuns(opts: { repoId?: string; taskId?: string; limit?: number } = {}): ValidationRunRecord[] {
+  listRuns(
+    opts: { repoId?: string; taskId?: string; until?: string; limit?: number } = {},
+  ): ValidationRunRecord[] {
     const clauses: string[] = ['runner_device_id = @device'];
-    const params: Record<string, unknown> = { device: this.options.deviceId, limit: opts.limit ?? 200 };
+    const params: Record<string, unknown> = {
+      device: this.options.deviceId,
+      limit: opts.limit ?? 200,
+    };
     if (opts.repoId) {
       clauses.push('repo_id = @repo');
       params.repo = opts.repoId;
@@ -523,10 +581,14 @@ export class ValidationSupervisor {
       clauses.push('task_id = @task');
       params.task = opts.taskId;
     }
+    if (opts.until) {
+      clauses.push('julianday(started_at) <= julianday(@until)');
+      params.until = opts.until;
+    }
     const rows = this.db
       .prepare(
         `SELECT * FROM validation_runs WHERE ${clauses.join(' AND ')}
-         ORDER BY started_at DESC LIMIT @limit`,
+         ORDER BY julianday(started_at) DESC, run_id DESC LIMIT @limit`,
       )
       .all(params) as RunRow[];
     if (rows.length === 0) return [];

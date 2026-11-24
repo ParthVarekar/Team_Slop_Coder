@@ -161,6 +161,13 @@ describe('ValidationSupervisor evidence', () => {
     // Evidence reads back identically from SQLite.
     expect(supervisor.getRun(run.run_id)).toEqual(run);
     expect(supervisor.listRuns({ repoId: repo.repo_id })).toHaveLength(1);
+    expect(
+      supervisor.listRuns({
+        repoId: repo.repo_id,
+        until: new Date(Date.parse(run.started_at) - 1).toISOString(),
+      }),
+    ).toHaveLength(0);
+    expect(supervisor.listRuns({ repoId: repo.repo_id, until: run.started_at })).toHaveLength(1);
 
     const types = captured.map((e) => e.type);
     expect(types.indexOf('validation.started')).toBeGreaterThanOrEqual(0);
@@ -185,7 +192,9 @@ describe('ValidationSupervisor evidence', () => {
 
   it('records a spawn failure as error with a null exit code', async () => {
     const { registry, supervisor } = harness({
-      checks: [{ check_id: 'missing', command: 'weft-no-such-binary-xyz', args: [], selection: 'full' }],
+      checks: [
+        { check_id: 'missing', command: 'weft-no-such-binary-xyz', args: [], selection: 'full' },
+      ],
     });
     const repo = await registry.register(makeRepo());
     const run = await supervisor.run(repo.repo_id);
@@ -195,10 +204,7 @@ describe('ValidationSupervisor evidence', () => {
 
   it('attaches evidence for every check and lets failure dominate a pass', async () => {
     const { registry, supervisor } = harness({
-      checks: [
-        nodeCheck('a', 'process.exit(0)'),
-        nodeCheck('b', 'process.exit(1)'),
-      ],
+      checks: [nodeCheck('a', 'process.exit(0)'), nodeCheck('b', 'process.exit(1)')],
     });
     const repo = await registry.register(makeRepo());
     const run = await supervisor.run(repo.repo_id);
@@ -266,7 +272,10 @@ describe('ValidationSupervisor cross-device independence', () => {
     const { registry, supervisor, deviceId, captured } = harness();
     const repo = await registry.register(makeRepo());
     const claimant = makeId('device');
-    const run = await supervisor.run(repo.repo_id, { trigger: 'queue', claimantDeviceId: claimant });
+    const run = await supervisor.run(repo.repo_id, {
+      trigger: 'queue',
+      claimantDeviceId: claimant,
+    });
     expect(run.independence).toBe('independent');
     expect(run.runner_device_id).toBe(deviceId);
     expect(run.claimant_device_id).toBe(claimant);
@@ -331,7 +340,9 @@ describe('completion is a claim, not a verified fact', () => {
     expect(after?.version).toBe(0);
     expect(tasks.listClaims(task.task_id)).toHaveLength(1);
     expect(
-      captured.some((e) => e.type === 'task.completion_claimed' && e.payload.evidence_state === 'unverified'),
+      captured.some(
+        (e) => e.type === 'task.completion_claimed' && e.payload.evidence_state === 'unverified',
+      ),
     ).toBe(true);
 
     // A claim is not evidence: completion stays blocked.

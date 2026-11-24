@@ -106,7 +106,11 @@ function check(runId: string, c: CheckFields, o: EnvOpts = {}): EventEnvelope {
   );
 }
 
-function completed(runId: string, state: 'passed' | 'failed' | 'error', o: EnvOpts = {}): EventEnvelope {
+function completed(
+  runId: string,
+  state: 'passed' | 'failed' | 'error',
+  o: EnvOpts = {},
+): EventEnvelope {
   return envelope(
     'validation.completed',
     {
@@ -124,7 +128,11 @@ function completed(runId: string, state: 'passed' | 'failed' | 'error', o: EnvOp
 }
 
 function claim(taskId: string, text: string, o: EnvOpts = {}): EventEnvelope {
-  return envelope('task.completion_claimed', { claim_text: text, evidence_state: 'unverified' }, { ...o, taskId });
+  return envelope(
+    'task.completion_claimed',
+    { claim_text: text, evidence_state: 'unverified' },
+    { ...o, taskId },
+  );
 }
 
 describe('server validation projection (real Postgres 16)', () => {
@@ -133,7 +141,11 @@ describe('server validation projection (real Postgres 16)', () => {
     const repoId = makeId('repo');
     const res = await ingest.ingestBatch([
       started(runId, { repoId }),
-      check(runId, { check_id: 'typecheck', exit_code: 0, log_excerpt: 'all good', duration_ms: 12 }, { repoId }),
+      check(
+        runId,
+        { check_id: 'typecheck', exit_code: 0, log_excerpt: 'all good', duration_ms: 12 },
+        { repoId },
+      ),
       completed(runId, 'passed', { repoId }),
     ]);
     expect(res.rejected).toHaveLength(0);
@@ -160,6 +172,15 @@ describe('server validation projection (real Postgres 16)', () => {
     expect(c?.newly_failing).toBe(false);
 
     expect(await validation.listRuns(world.projectA, { repoId })).toHaveLength(1);
+    expect(
+      await validation.listRuns(world.projectA, {
+        repoId,
+        until: new Date(Date.parse(run!.started_at) - 1).toISOString(),
+      }),
+    ).toHaveLength(0);
+    expect(
+      await validation.listRuns(world.projectA, { repoId, until: run!.started_at }),
+    ).toHaveLength(1);
     // The evidence is mirrored into the durable coordination trail.
     const coord = await db.pool.query(
       `SELECT type FROM coordination_events WHERE payload->>'run_id' = $1 ORDER BY global_seq`,
@@ -288,9 +309,18 @@ describe('completion claims: unverified evidence, never auto-completed', () => {
   });
 
   it('RPC claim is unverified and completion stays blocked until a passing run is ingested', async () => {
-    const task = await tasks.create(world.projectA, { title: 'Verify me', state: 'validation' }, origin);
+    const task = await tasks.create(
+      world.projectA,
+      { title: 'Verify me', state: 'validation' },
+      origin,
+    );
     const secret = `ghp_${'b'.repeat(40)}`;
-    const recorded = await tasks.claimCompletion(task.id, world.projectA, `finished ${secret}`, origin);
+    const recorded = await tasks.claimCompletion(
+      task.id,
+      world.projectA,
+      `finished ${secret}`,
+      origin,
+    );
     expect(recorded.evidence_state).toBe('unverified');
     expect(recorded.claim_text).not.toContain(secret);
 
@@ -323,7 +353,11 @@ describe('completion claims: unverified evidence, never auto-completed', () => {
   });
 
   it('a failed run does not satisfy the completion guard', async () => {
-    const task = await tasks.create(world.projectA, { title: 'Failing', state: 'validation' }, origin);
+    const task = await tasks.create(
+      world.projectA,
+      { title: 'Failing', state: 'validation' },
+      origin,
+    );
     const runId = makeId('validation');
     const repoId = makeId('repo');
     await ingest.ingestBatch([

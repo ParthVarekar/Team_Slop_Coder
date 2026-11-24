@@ -36,6 +36,7 @@ import { Indexer } from './indexer.js';
 import { OverlapEngine } from './overlap.js';
 import { ResolverClient } from './resolver.js';
 import { ModuleGraphService } from './module-graph.js';
+import { HandoffService } from './handoff-service.js';
 
 const DAEMON_VERSION = '0.0.0';
 
@@ -63,6 +64,7 @@ export class Daemon {
   readonly overlap: OverlapEngine;
   readonly resolver: ResolverClient;
   readonly moduleGraph: ModuleGraphService;
+  readonly handoff: HandoffService;
   readonly watcher: Watcher;
   readonly worktrees: WorktreeManager;
   readonly conflicts: ConflictDetector;
@@ -139,6 +141,7 @@ export class Daemon {
     });
     this.resolver = new ResolverClient(this.config.resolver, this.logger);
     this.moduleGraph = new ModuleGraphService({ registry: this.repos, logger: this.logger });
+    this.handoff = new HandoffService(this);
     this.watcher = new Watcher({
       registry: this.repos,
       actor: this.actor,
@@ -198,7 +201,11 @@ export class Daemon {
       this.taskCache = new TaskCache({
         onClaimRejected: (rejection) => {
           this.logger.warn(
-            { taskId: rejection.task_id, provisional: rejection.provisional, winner: rejection.winner_claimant },
+            {
+              taskId: rejection.task_id,
+              provisional: rejection.provisional,
+              winner: rejection.winner_claimant,
+            },
             'task claim rejected; discarding quarantined worktree (work preserved in WIP ref)',
           );
           void this.worktrees

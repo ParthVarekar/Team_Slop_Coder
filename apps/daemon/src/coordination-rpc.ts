@@ -1,5 +1,5 @@
 import type { Logger } from '@weft/core';
-import type { Actor, TaskSnapshot } from '@weft/protocol';
+import type { Actor, StoredEvent, TaskSnapshot } from '@weft/protocol';
 import type {
   LeaseOutcome,
   MergeEntryView,
@@ -31,6 +31,34 @@ export interface RpcReservation {
   lease_epoch: number;
   created_at: string;
   released_reason: string | null;
+}
+
+export interface RpcCompletionClaim {
+  id: string;
+  task_id: string;
+  session_id: string | null;
+  claimed_at: string;
+  claim_text: string | null;
+  evidence_state: string;
+}
+
+export interface RpcValidationCheck {
+  check_id: string;
+  exit_code: number | null;
+  selection: string;
+  log_digest: string;
+}
+
+export interface RpcValidationRun {
+  id: string;
+  task_id: string | null;
+  candidate_oid: string | null;
+  tree_oid: string | null;
+  state: 'running' | 'passed' | 'failed' | 'error';
+  started_at: string;
+  finished_at: string | null;
+  independence: 'self' | 'independent';
+  checks: RpcValidationCheck[];
 }
 
 export type RpcClaimResult =
@@ -180,7 +208,8 @@ export class CoordinationRpc implements MergeQueueClient {
     const allow = opts.allow ?? [200, 201];
     if (!allow.includes(res.status)) {
       const code = typeof json.error === 'string' ? json.error : 'rpc_error';
-      const message = typeof json.message === 'string' ? json.message : `${method} ${path} failed: ${res.status}`;
+      const message =
+        typeof json.message === 'string' ? json.message : `${method} ${path} failed: ${res.status}`;
       this.logger?.debug({ status: res.status, code, path }, 'coordination rpc error');
       throw new CoordinationRpcError(res.status, code, message);
     }
@@ -242,13 +271,49 @@ export class CoordinationRpc implements MergeQueueClient {
     return json.reservation as RpcReservation;
   }
 
-  async listReservations(opts: { repoId?: string; taskId?: string; state?: 'active' | 'released' } = {}): Promise<RpcReservation[]> {
+  async listReservations(
+    opts: { repoId?: string; taskId?: string; state?: 'active' | 'released' } = {},
+  ): Promise<RpcReservation[]> {
     const query: Record<string, string> = {};
     if (opts.repoId) query.repoId = opts.repoId;
     if (opts.taskId) query.taskId = opts.taskId;
     if (opts.state) query.state = opts.state;
     const { json } = await this.call('GET', '/v1/reservations', { query });
     return (json.reservations as RpcReservation[]) ?? [];
+  }
+
+  async listCompletionClaims(taskId: string): Promise<RpcCompletionClaim[]> {
+    const { json } = await this.call('GET', `/v1/tasks/${encodeURIComponent(taskId)}/claims`);
+    return (json.claims as RpcCompletionClaim[]) ?? [];
+  }
+
+  async listValidationRuns(taskId: string, limit = 5, until?: string): Promise<RpcValidationRun[]> {
+    const { json } = await this.call('GET', '/v1/validation/runs', {
+      query: { taskId, limit: String(limit), ...(until ? { until } : {}) },
+    });
+    return (json.runs as RpcValidationRun[]) ?? [];
+  }
+
+  async getHandoffChanges(input: {
+    taskId: string;
+    repoId: string;
+    since: string;
+    until: string;
+    limit?: number;
+  }): Promise<{ events: StoredEvent[]; history_complete: boolean }> {
+    const { json } = await this.call('GET', '/v1/handoff/changes', {
+      query: {
+        taskId: input.taskId,
+        repoId: input.repoId,
+        since: input.since,
+        until: input.until,
+        limit: String(input.limit ?? 1000),
+      },
+    });
+    return {
+      events: (json.events as StoredEvent[]) ?? [],
+      history_complete: json.history_complete === true,
+    };
   }
 
   // --- Merge queue (MergeQueueClient: the executor's authoritative surface) ---
@@ -260,7 +325,11 @@ export class CoordinationRpc implements MergeQueueClient {
     return json as unknown as LeaseOutcome;
   }
 
-  async renewLease(repoId: string, deviceId: string, ttlMs?: number): Promise<LeaseOutcome['lease']> {
+  async renewLease(
+    repoId: string,
+    deviceId: string,
+    ttlMs?: number,
+  ): Promise<LeaseOutcome['lease']> {
     const { json } = await this.call('POST', '/v1/merge/lease/renew', {
       body: { repo_id: repoId, device_id: deviceId, ...(ttlMs != null ? { ttl_ms: ttlMs } : {}) },
     });
@@ -287,13 +356,19 @@ export class CoordinationRpc implements MergeQueueClient {
         branch: input.branch,
         ...(input.candidate_oid != null ? { candidate_oid: input.candidate_oid } : {}),
         ...(input.target_branch != null ? { target_branch: input.target_branch } : {}),
-        ...(input.claimant_device_id != null ? { claimant_device_id: input.claimant_device_id } : {}),
+        ...(input.claimant_device_id != null
+          ? { claimant_device_id: input.claimant_device_id }
+          : {}),
       },
     });
     return json.entry as MergeEntryView;
   }
 
-  async claimNext(repoId: string, deviceId: string, leaseEpoch: number): Promise<MergeEntryView | null> {
+  async claimNext(
+    repoId: string,
+    deviceId: string,
+    leaseEpoch: number,
+  ): Promise<MergeEntryView | null> {
     const { json } = await this.call('POST', '/v1/merge/claim', {
       body: { repo_id: repoId, device_id: deviceId, lease_epoch: leaseEpoch },
     });
@@ -306,40 +381,79 @@ export class CoordinationRpc implements MergeQueueClient {
     deviceId: string,
     leaseEpoch: number,
   ): Promise<MergeEntryView> {
-    const { json } = await this.call('POST', `/v1/merge/entries/${encodeURIComponent(entryId)}/speculative-tree`, {
-      body: { ...input, device_id: deviceId, lease_epoch: leaseEpoch },
-    });
+    const { json } = await this.call(
+      'POST',
+      `/v1/merge/entries/${encodeURIComponent(entryId)}/speculative-tree`,
+      {
+        body: { ...input, device_id: deviceId, lease_epoch: leaseEpoch },
+      },
+    );
     return json.entry as MergeEntryView;
   }
 
-  async attachValidation(entryId: string, validationRunId: string, deviceId: string, leaseEpoch: number): Promise<MergeEntryView> {
-    const { json } = await this.call('POST', `/v1/merge/entries/${encodeURIComponent(entryId)}/attach-validation`, {
-      body: { validation_run_id: validationRunId, device_id: deviceId, lease_epoch: leaseEpoch },
-    });
+  async attachValidation(
+    entryId: string,
+    validationRunId: string,
+    deviceId: string,
+    leaseEpoch: number,
+  ): Promise<MergeEntryView> {
+    const { json } = await this.call(
+      'POST',
+      `/v1/merge/entries/${encodeURIComponent(entryId)}/attach-validation`,
+      {
+        body: { validation_run_id: validationRunId, device_id: deviceId, lease_epoch: leaseEpoch },
+      },
+    );
     return json.entry as MergeEntryView;
   }
 
-  async advance(entryId: string, mergedOid: string, deviceId: string, leaseEpoch: number): Promise<MergeEntryView> {
-    const { json } = await this.call('POST', `/v1/merge/entries/${encodeURIComponent(entryId)}/advance`, {
-      body: { merged_oid: mergedOid, device_id: deviceId, lease_epoch: leaseEpoch },
-    });
+  async advance(
+    entryId: string,
+    mergedOid: string,
+    deviceId: string,
+    leaseEpoch: number,
+  ): Promise<MergeEntryView> {
+    const { json } = await this.call(
+      'POST',
+      `/v1/merge/entries/${encodeURIComponent(entryId)}/advance`,
+      {
+        body: { merged_oid: mergedOid, device_id: deviceId, lease_epoch: leaseEpoch },
+      },
+    );
     return json.entry as MergeEntryView;
   }
 
-  async eject(entryId: string, reason: string, deviceId: string, leaseEpoch: number): Promise<MergeEntryView> {
-    const { json } = await this.call('POST', `/v1/merge/entries/${encodeURIComponent(entryId)}/eject`, {
-      body: { reason, device_id: deviceId, lease_epoch: leaseEpoch },
-    });
+  async eject(
+    entryId: string,
+    reason: string,
+    deviceId: string,
+    leaseEpoch: number,
+  ): Promise<MergeEntryView> {
+    const { json } = await this.call(
+      'POST',
+      `/v1/merge/entries/${encodeURIComponent(entryId)}/eject`,
+      {
+        body: { reason, device_id: deviceId, lease_epoch: leaseEpoch },
+      },
+    );
     return json.entry as MergeEntryView;
   }
 
   async requeue(entryId: string): Promise<MergeEntryView> {
-    const { json } = await this.call('POST', `/v1/merge/entries/${encodeURIComponent(entryId)}/requeue`, { body: {} });
+    const { json } = await this.call(
+      'POST',
+      `/v1/merge/entries/${encodeURIComponent(entryId)}/requeue`,
+      { body: {} },
+    );
     return json.entry as MergeEntryView;
   }
 
   async getEntry(entryId: string): Promise<MergeEntryView | null> {
-    const { status, json } = await this.call('GET', `/v1/merge/entries/${encodeURIComponent(entryId)}`, { allow: [200, 404] });
+    const { status, json } = await this.call(
+      'GET',
+      `/v1/merge/entries/${encodeURIComponent(entryId)}`,
+      { allow: [200, 404] },
+    );
     if (status === 404) return null;
     return (json.entry as MergeEntryView) ?? null;
   }
@@ -360,14 +474,18 @@ export class CoordinationRpc implements MergeQueueClient {
         branch: input.branch,
         commit_oid: input.commit_oid,
         ...(input.validation_run_id != null ? { validation_run_id: input.validation_run_id } : {}),
-        ...(input.check_results_summary != null ? { check_results_summary: input.check_results_summary } : {}),
+        ...(input.check_results_summary != null
+          ? { check_results_summary: input.check_results_summary }
+          : {}),
       },
     });
     return json.baseline as RpcBaseline;
   }
 
   async latestBaseline(repoId: string, branch: string): Promise<RpcBaseline | null> {
-    const { json } = await this.call('GET', '/v1/health/baselines/latest', { query: { repoId, branch } });
+    const { json } = await this.call('GET', '/v1/health/baselines/latest', {
+      query: { repoId, branch },
+    });
     return (json.baseline as RpcBaseline) ?? null;
   }
 
@@ -383,22 +501,44 @@ export class CoordinationRpc implements MergeQueueClient {
     return json.regression as RpcRegression;
   }
 
-  async attributeRegression(regressionId: string, changes: RpcSuspectChange[]): Promise<RpcRankedSuspect[]> {
-    const { json } = await this.call('POST', `/v1/health/regressions/${encodeURIComponent(regressionId)}/attribute`, {
-      body: { changes },
-    });
+  async attributeRegression(
+    regressionId: string,
+    changes: RpcSuspectChange[],
+  ): Promise<RpcRankedSuspect[]> {
+    const { json } = await this.call(
+      'POST',
+      `/v1/health/regressions/${encodeURIComponent(regressionId)}/attribute`,
+      {
+        body: { changes },
+      },
+    );
     return (json.suspects as RpcRankedSuspect[]) ?? [];
   }
 
-  async confirmRegression(regressionId: string, confirmedChangeId: string, revertOid?: string): Promise<RpcRegression> {
-    const { json } = await this.call('POST', `/v1/health/regressions/${encodeURIComponent(regressionId)}/confirm`, {
-      body: { confirmed_change_id: confirmedChangeId, ...(revertOid != null ? { revert_oid: revertOid } : {}) },
-    });
+  async confirmRegression(
+    regressionId: string,
+    confirmedChangeId: string,
+    revertOid?: string,
+  ): Promise<RpcRegression> {
+    const { json } = await this.call(
+      'POST',
+      `/v1/health/regressions/${encodeURIComponent(regressionId)}/confirm`,
+      {
+        body: {
+          confirmed_change_id: confirmedChangeId,
+          ...(revertOid != null ? { revert_oid: revertOid } : {}),
+        },
+      },
+    );
     return json.regression as RpcRegression;
   }
 
   async getRegression(regressionId: string): Promise<RpcRegression | null> {
-    const { status, json } = await this.call('GET', `/v1/health/regressions/${encodeURIComponent(regressionId)}`, { allow: [200, 404] });
+    const { status, json } = await this.call(
+      'GET',
+      `/v1/health/regressions/${encodeURIComponent(regressionId)}`,
+      { allow: [200, 404] },
+    );
     if (status === 404) return null;
     return (json.regression as RpcRegression) ?? null;
   }

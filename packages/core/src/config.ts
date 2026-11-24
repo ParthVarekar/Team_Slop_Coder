@@ -51,12 +51,27 @@ export const WeftConfigSchema = z.object({
       /** Max concurrent validation runs; defaults to cpuCount-1 at runtime. */
       concurrency: z.number().int().min(1).max(64).optional(),
       timeoutMs: z.number().int().positive().max(3_600_000).default(120_000),
-      outputCapBytes: z.number().int().positive().max(64 * 1024 * 1024).default(1_048_576),
+      outputCapBytes: z
+        .number()
+        .int()
+        .positive()
+        .max(64 * 1024 * 1024)
+        .default(1_048_576),
       excerptBytes: z.number().int().positive().max(1_048_576).default(4096),
       checks: z.array(ValidationCheckConfigSchema).max(50).default([]),
     })
     .default({}),
   retention: z.object({ telemetryDays: z.number().int().positive().default(90) }).default({}),
+  recap: z
+    .object({
+      enabled: z.boolean().default(false),
+      endpoint: z.string().url().nullable().default(null),
+      token: z.string().nullable().default(null),
+      model: z.string().min(1).max(200).nullable().default(null),
+      maxChars: z.number().int().min(1).max(400).default(400),
+      timeoutMs: z.number().int().min(100).max(10_000).default(3000),
+    })
+    .default({}),
   resolver: z
     .object({
       /** Exact reference resolution runs in a separate process with its own budget. */
@@ -90,6 +105,10 @@ export const WEFT_ENV_MAP: Record<string, string> = {
   WEFT_VALIDATION_TIMEOUT_MS: 'validation.timeoutMs',
   WEFT_VALIDATION_CONCURRENCY: 'validation.concurrency',
   WEFT_TELEMETRY_DAYS: 'retention.telemetryDays',
+  WEFT_RECAP_ENABLED: 'recap.enabled',
+  WEFT_RECAP_ENDPOINT: 'recap.endpoint',
+  WEFT_RECAP_TOKEN: 'recap.token',
+  WEFT_RECAP_MODEL: 'recap.model',
   WEFT_RESOLVER_ENABLED: 'resolver.enabled',
   WEFT_RESOLVER_MAX_MB: 'resolver.maxMemoryMb',
   WEFT_RESOLVER_IDLE_MS: 'resolver.idleTimeoutMs',

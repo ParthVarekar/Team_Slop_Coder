@@ -127,8 +127,14 @@ describe('team server bootstrap (real Postgres 16)', () => {
     };
     const member = await issue(world.memberUser, 'member');
     const viewer = await issue(world.viewerUser, 'viewer');
-    const asMember = { authorization: `Bearer ${member.token}`, 'content-type': 'application/json' };
-    const asViewer = { authorization: `Bearer ${viewer.token}`, 'content-type': 'application/json' };
+    const asMember = {
+      authorization: `Bearer ${member.token}`,
+      'content-type': 'application/json',
+    };
+    const asViewer = {
+      authorization: `Bearer ${viewer.token}`,
+      'content-type': 'application/json',
+    };
 
     const eventId = ulid();
     const ingest = await fetch(`${baseUrl}/v1/ingest`, {
@@ -145,18 +151,30 @@ describe('team server bootstrap (real Postgres 16)', () => {
             type: 'notification.created',
             actor: { user_id: world.memberUser, agent: null },
             privacy: 'metadata',
-            payload: { kind: 'approval', subject: 'Please review the merge', target_user_id: world.memberUser },
+            payload: {
+              kind: 'approval',
+              subject: 'Please review the merge',
+              target_user_id: world.memberUser,
+            },
           },
         ],
       }),
     });
     expect(ingest.status).toBe(202);
 
-    const inbox = await fetch(`${baseUrl}/v1/notifications?projectId=${world.projectA}`, { headers: asMember });
+    const inbox = await fetch(`${baseUrl}/v1/notifications?projectId=${world.projectA}`, {
+      headers: asMember,
+    });
     expect(inbox.status).toBe(200);
-    const cards = (await inbox.json()) as { notifications: { id: string; state: string; user_id: string }[] };
+    const cards = (await inbox.json()) as {
+      notifications: { id: string; state: string; user_id: string }[];
+    };
     expect(cards.notifications).toHaveLength(1);
-    expect(cards.notifications[0]).toMatchObject({ id: eventId, state: 'inbox', user_id: world.memberUser });
+    expect(cards.notifications[0]).toMatchObject({
+      id: eventId,
+      state: 'inbox',
+      user_id: world.memberUser,
+    });
 
     const triage = await fetch(`${baseUrl}/v1/notifications/${eventId}/state`, {
       method: 'POST',
@@ -175,8 +193,12 @@ describe('team server bootstrap (real Postgres 16)', () => {
     expect(((await empty.json()) as { notifications: unknown[] }).notifications).toHaveLength(0);
 
     // A viewer only ever sees its own (empty) inbox and cannot triage.
-    const viewerInbox = await fetch(`${baseUrl}/v1/notifications?projectId=${world.projectA}`, { headers: asViewer });
-    expect(((await viewerInbox.json()) as { notifications: unknown[] }).notifications).toHaveLength(0);
+    const viewerInbox = await fetch(`${baseUrl}/v1/notifications?projectId=${world.projectA}`, {
+      headers: asViewer,
+    });
+    expect(((await viewerInbox.json()) as { notifications: unknown[] }).notifications).toHaveLength(
+      0,
+    );
     const viewerTriage = await fetch(`${baseUrl}/v1/notifications/${eventId}/state`, {
       method: 'POST',
       headers: asViewer,
@@ -184,14 +206,20 @@ describe('team server bootstrap (real Postgres 16)', () => {
     });
     expect(viewerTriage.status).toBe(403);
 
-    const directory = await fetch(`${baseUrl}/v1/members?projectId=${world.projectA}`, { headers: asMember });
+    const directory = await fetch(`${baseUrl}/v1/members?projectId=${world.projectA}`, {
+      headers: asMember,
+    });
     expect(directory.status).toBe(200);
-    const members = (await directory.json()) as { members: { userId: string; displayName: string }[] };
+    const members = (await directory.json()) as {
+      members: { userId: string; displayName: string }[];
+    };
     expect(members.members.map((m) => m.userId)).toContain(world.memberUser);
     expect(members.members.find((m) => m.userId === world.memberUser)?.displayName).toBeTruthy();
 
     // A project-A token can never address project B's inbox.
-    const cross = await fetch(`${baseUrl}/v1/notifications?projectId=${world.projectB}`, { headers: asMember });
+    const cross = await fetch(`${baseUrl}/v1/notifications?projectId=${world.projectB}`, {
+      headers: asMember,
+    });
     expect(cross.status).toBe(403);
     expect((await cross.json()) as { reason: string }).toMatchObject({ reason: 'cross_project' });
   });
@@ -209,7 +237,9 @@ describe('team server bootstrap (real Postgres 16)', () => {
     expect(preflight.headers.get('access-control-allow-origin')).toBe('*');
     expect(preflight.headers.get('access-control-allow-headers')).toContain('authorization');
 
-    const simple = await fetch(`${baseUrl}/healthz`, { headers: { origin: 'http://localhost:5173' } });
+    const simple = await fetch(`${baseUrl}/healthz`, {
+      headers: { origin: 'http://localhost:5173' },
+    });
     expect(simple.status).toBe(200);
     expect(simple.headers.get('access-control-allow-origin')).toBe('*');
   });
@@ -232,6 +262,79 @@ describe('team server bootstrap (real Postgres 16)', () => {
     expect(res.headers.get('content-type')).toContain('text/event-stream');
     controller.abort();
     await res.body?.cancel().catch(() => {});
+  });
+
+  it('serves bounded handoff changes with task/repo scoping and cutoff filters', async () => {
+    const projectId = makeId('project');
+    const repoId = makeId('repo');
+    const taskId = makeId('task');
+    const since = '2026-11-25T11:00:00.000Z';
+    const until = '2026-11-25T12:00:00.000Z';
+    const fileEvent = (id: string, eventRepo: string, eventTask: string | null, ts: string) => ({
+      v: PROTOCOL_VERSION,
+      event_id: id,
+      device_id: makeId('device'),
+      project_id: projectId,
+      repo_id: eventRepo,
+      ...(eventTask ? { task_id: eventTask } : {}),
+      ts,
+      type: 'file.changed',
+      actor: { user_id: 'user_test', agent: null },
+      privacy: 'metadata',
+      payload: { path: 'src/a.ts', change_kind: 'modify', source: 'watcher' },
+    });
+    const target = ulid();
+    const repoChange = ulid();
+    const excludedTask = ulid();
+    const excludedRepo = ulid();
+    const future = ulid();
+    const old = ulid();
+    const newestNoise = ulid();
+    const nextNoise = ulid();
+    const noise = (id: string, ts: string) => ({
+      ...fileEvent(id, repoId, taskId, ts),
+      type: 'task.updated',
+      payload: { fields: { title: 'Not a file change' } },
+    });
+    const ingest = await fetch(`${baseUrl}/v1/ingest`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${adminSecret}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        events: [
+          fileEvent(target, repoId, taskId, '2026-11-25T11:30:00.000Z'),
+          fileEvent(repoChange, repoId, null, '2026-11-25T11:31:00.000Z'),
+          fileEvent(excludedRepo, makeId('repo'), excludedTask, '2026-11-25T11:32:00.000Z'),
+          fileEvent(future, repoId, taskId, '2026-11-25T13:00:00.000Z'),
+          fileEvent(old, repoId, taskId, '2026-11-25T10:00:00.000Z'),
+          noise(newestNoise, '2026-11-25T11:59:00.000Z'),
+          noise(nextNoise, '2026-11-25T11:58:00.000Z'),
+        ],
+      }),
+    });
+    expect(ingest.status).toBe(202);
+    const query = new URLSearchParams({ projectId, taskId, repoId, since, until, limit: '2' });
+    const denied = await fetch(`${baseUrl}/v1/handoff/changes?${query}`);
+    expect(denied.status).toBe(401);
+    const res = await fetch(`${baseUrl}/v1/handoff/changes?${query}`, {
+      headers: { authorization: `Bearer ${adminSecret}` },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      events: { event_id: string; task_id?: string }[];
+      history_complete: boolean;
+    };
+    expect(body.events.map((event) => event.event_id)).toEqual([repoChange, target]);
+    expect(body.events[1]?.task_id).toBe(taskId);
+    expect(body.history_complete).toBe(false);
+    expect(body.events.map((event) => event.event_id)).not.toContain(excludedTask);
+    expect(body.events.map((event) => event.event_id)).not.toContain(newestNoise);
+    expect(body.events.map((event) => event.event_id)).not.toContain(nextNoise);
+
+    const invalidWindow = await fetch(
+      `${baseUrl}/v1/handoff/changes?${new URLSearchParams({ projectId, taskId, repoId, since: until, until: since })}`,
+      { headers: { authorization: `Bearer ${adminSecret}` } },
+    );
+    expect(invalidWindow.status).toBe(400);
   });
 
   it('closes gracefully and idempotently, releasing the port', async () => {

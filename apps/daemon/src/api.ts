@@ -105,6 +105,11 @@ const ContextQuery = z.object({
   task_id: z.string().min(1),
   budget_bytes: z.coerce.number().int().positive().max(65536).optional(),
 });
+const HandoffQuery = z.object({
+  as_of: z.coerce.number().int().nonnegative().max(8_640_000_000_000_000).optional(),
+  recent_since: z.coerce.number().int().nonnegative().max(8_640_000_000_000_000).optional(),
+  recap: z.enum(['true', 'false']).optional(),
+});
 const McpClaimBody = z.object({
   task_id: z.string().min(1),
   base_version: z.number().int().nonnegative().optional(),
@@ -702,6 +707,31 @@ export function createApiServer(daemon: Daemon, options: ApiServerOptions = {}):
     const task = daemon.tasks.getTask(id);
     if (!task) return reply.code(404).send({ error: 'not_found' });
     return { task };
+  });
+
+  app.get('/v1/tasks/:id/handoff', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const parsed = HandoffQuery.safeParse(req.query);
+    if (!parsed.success)
+      return reply.code(400).send({ error: 'validation', message: parsed.error.message });
+    if (
+      parsed.data.recent_since != null &&
+      parsed.data.as_of != null &&
+      parsed.data.recent_since > parsed.data.as_of
+    )
+      return reply
+        .code(400)
+        .send({ error: 'validation', message: 'recent_since must not exceed as_of' });
+    try {
+      return await daemon.handoff.get(id, {
+        ...(parsed.data.as_of != null ? { asOf: parsed.data.as_of } : {}),
+        ...(parsed.data.recent_since != null ? { recentSince: parsed.data.recent_since } : {}),
+        recap: parsed.data.recap === 'true',
+      });
+    } catch (err) {
+      if (err instanceof TaskError) return taskErrorReply(reply, err);
+      throw err;
+    }
   });
 
   app.patch('/v1/tasks/:id', async (req, reply) => {

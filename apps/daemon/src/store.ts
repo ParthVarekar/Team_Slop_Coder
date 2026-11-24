@@ -10,6 +10,13 @@ export interface EventQuery {
   projectId?: string;
   sessionId?: string;
   afterRowId?: number;
+  taskId?: string;
+  repoId?: string;
+  types?: string[];
+  since?: string;
+  until?: string;
+  newestFirst?: boolean;
+  deterministicRecent?: boolean;
   limit?: number;
 }
 
@@ -211,9 +218,38 @@ export class LocalStore {
       clauses.push('session_id = @session');
       params.session = query.sessionId;
     }
+    if (query.taskId && query.repoId) {
+      clauses.push('(task_id = @task OR repo_id = @repo)');
+      params.task = query.taskId;
+      params.repo = query.repoId;
+    } else {
+      if (query.taskId) {
+        clauses.push('task_id = @task');
+        params.task = query.taskId;
+      }
+      if (query.repoId) {
+        clauses.push('repo_id = @repo');
+        params.repo = query.repoId;
+      }
+    }
+    if (query.types?.length) {
+      clauses.push('type IN (SELECT value FROM json_each(@types))');
+      params.types = JSON.stringify(query.types);
+    }
+    if (query.since) {
+      clauses.push('julianday(ts) >= julianday(@since)');
+      params.since = query.since;
+    }
+    if (query.until) {
+      clauses.push('julianday(ts) <= julianday(@until)');
+      params.until = query.until;
+    }
     const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    const order = query.deterministicRecent
+      ? 'julianday(ts) DESC, event_id DESC'
+      : `rowid ${query.newestFirst ? 'DESC' : 'ASC'}`;
     const rows = this.db
-      .prepare(`SELECT rowid, * FROM events ${where} ORDER BY rowid ASC LIMIT @limit`)
+      .prepare(`SELECT rowid, * FROM events ${where} ORDER BY ${order} LIMIT @limit`)
       .all(params) as EventRow[];
     return rows.map(rowToEvent);
   }
@@ -457,7 +493,9 @@ export class LocalStore {
 
   listIndexedFiles(repoId: string, branch: string): string[] {
     const rows = this.db
-      .prepare('SELECT file_path FROM file_index_state WHERE repo_id = ? AND branch = ? ORDER BY file_path')
+      .prepare(
+        'SELECT file_path FROM file_index_state WHERE repo_id = ? AND branch = ? ORDER BY file_path',
+      )
       .all(repoId, branch) as { file_path: string }[];
     return rows.map((r) => r.file_path);
   }
@@ -468,7 +506,9 @@ export class LocalStore {
           .prepare(
             'SELECT * FROM symbols WHERE repo_id = ? AND branch = ? AND file_path = ? ORDER BY start_line, name',
           )
-          .all(repoId, branch, filePath) as (Omit<StoredSymbol, 'exported'> & { exported: number })[])
+          .all(repoId, branch, filePath) as (Omit<StoredSymbol, 'exported'> & {
+          exported: number;
+        })[])
       : (this.db
           .prepare(
             'SELECT * FROM symbols WHERE repo_id = ? AND branch = ? ORDER BY file_path, start_line, name',
