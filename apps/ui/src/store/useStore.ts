@@ -8,6 +8,7 @@ import { deriveSessions } from '../lib/sessions.js';
 import {
   str,
   type Bootstrap,
+  type CompactionNotice,
   type ConnectionStatus,
   type DirectoryEntry,
   type Mode,
@@ -21,6 +22,7 @@ import {
 } from '../lib/types.js';
 
 const EVENT_CAP = 5000;
+const INGEST_BATCH_MS = 50;
 const LIST_REFRESH_MS = 4000;
 
 export type ListTab = 'sessions' | 'tasks' | 'repos' | 'inbox';
@@ -57,6 +59,8 @@ export interface StoreState {
   selectedNotificationId: string | null;
   paletteOpen: boolean;
   settingsOpen: boolean;
+  retentionOpen: boolean;
+  compactionNotice: CompactionNotice | null;
   init: () => Promise<void>;
   connectLocal: () => Promise<void>;
   connectTeam: (connection: TeamConnection) => Promise<void>;
@@ -77,13 +81,55 @@ export interface StoreState {
   selectNotification: (id: string | null) => void;
   setPaletteOpen: (open: boolean) => void;
   setSettingsOpen: (open: boolean) => void;
+  setRetentionOpen: (open: boolean) => void;
+  noticeCompaction: (notice: CompactionNotice) => void;
+  clearCompactionNotice: () => void;
 }
 
-const EMPTY_FILTERS: Filters = { category: null, session: null, repo: null, task: null, search: '' };
+const EMPTY_FILTERS: Filters = {
+  category: null,
+  session: null,
+  repo: null,
+  task: null,
+  search: '',
+};
 const seen = new Set<string>();
+let pendingEvents: WeftEvent[] = [];
+let ingestTimer: ReturnType<typeof setTimeout> | null = null;
 let sse: SseClient | null = null;
 let refreshTimer: ReturnType<typeof setInterval> | null = null;
 let initialized = false;
+
+function resetPendingEvents(): void {
+  if (ingestTimer) clearTimeout(ingestTimer);
+  ingestTimer = null;
+  pendingEvents = [];
+}
+
+function flushPendingEvents(): void {
+  ingestTimer = null;
+  if (pendingEvents.length === 0) return;
+  const incoming = pendingEvents;
+  pendingEvents = [];
+  const events = [...useStore.getState().events, ...incoming];
+  let cursor = useStore.getState().cursor;
+  for (const event of incoming) {
+    const seq = event.global_seq ?? event.rowid;
+    if (seq !== undefined && seq > cursor) cursor = seq;
+  }
+  if (events.length > EVENT_CAP) {
+    const dropped = events.splice(0, events.length - EVENT_CAP);
+    for (const event of dropped) seen.delete(event.event_id);
+  }
+  if (
+    useStore.getState().mode === 'team' &&
+    incoming.some((event) => event.type.startsWith('session.'))
+  ) {
+    useStore.setState({ events, cursor, sessions: deriveSessions(events) });
+  } else {
+    useStore.setState({ events, cursor });
+  }
+}
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -113,6 +159,8 @@ export const useStore = create<StoreState>((set, get) => ({
   selectedNotificationId: null,
   paletteOpen: false,
   settingsOpen: false,
+  retentionOpen: false,
+  compactionNotice: null,
 
   async init() {
     if (initialized) return;
@@ -124,15 +172,37 @@ export const useStore = create<StoreState>((set, get) => ({
 
   async connectLocal() {
     sse?.stop();
+    resetPendingEvents();
     seen.clear();
     if (refreshTimer) clearInterval(refreshTimer);
     set({
-      mode: 'local', connection: null, bootstrap: null, ready: false, error: null,
-      status: 'connecting', events: [], cursor: 0, sessions: [], tasks: [], repos: [],
-      directory: [], notifications: [], backend: null, listTab: 'sessions',
-      selectedEventId: null, selectedSessionId: null, selectedTaskId: null, selectedNotificationId: null,
+      mode: 'local',
+      connection: null,
+      bootstrap: null,
+      ready: false,
+      error: null,
+      status: 'connecting',
+      events: [],
+      cursor: 0,
+      sessions: [],
+      tasks: [],
+      repos: [],
+      directory: [],
+      notifications: [],
+      backend: null,
+      listTab: 'sessions',
+      selectedEventId: null,
+      selectedSessionId: null,
+      selectedTaskId: null,
+      selectedNotificationId: null,
     });
-    sse = new SseClient({ onEvent: (e) => get().ingest(e), onStatus: (s) => get().setStatus(s) });
+    sse = new SseClient(
+      {
+        onEvent: (e) => get().ingest(e),
+        onStatus: (s) => get().setStatus(s),
+      },
+      { onCompaction: (notice) => get().noticeCompaction(notice) },
+    );
     try {
       const b = await bootstrap();
       set({ bootstrap: b, ready: true, error: null });
@@ -146,14 +216,30 @@ export const useStore = create<StoreState>((set, get) => ({
 
   async connectTeam(connection) {
     sse?.stop();
+    resetPendingEvents();
     seen.clear();
     if (refreshTimer) clearInterval(refreshTimer);
     saveConnection(connection);
     set({
-      mode: 'team', connection, bootstrap: null, ready: false, error: null,
-      status: 'connecting', events: [], cursor: 0, sessions: [], tasks: [], repos: [],
-      directory: [], notifications: [], backend: null, listTab: 'sessions',
-      selectedEventId: null, selectedSessionId: null, selectedTaskId: null, selectedNotificationId: null,
+      mode: 'team',
+      connection,
+      bootstrap: null,
+      ready: false,
+      error: null,
+      status: 'connecting',
+      events: [],
+      cursor: 0,
+      sessions: [],
+      tasks: [],
+      repos: [],
+      directory: [],
+      notifications: [],
+      backend: null,
+      listTab: 'sessions',
+      selectedEventId: null,
+      selectedSessionId: null,
+      selectedTaskId: null,
+      selectedNotificationId: null,
     });
     const team = teamClient(connection);
     try {
@@ -171,6 +257,7 @@ export const useStore = create<StoreState>((set, get) => ({
           projectId: connection.projectId,
           headers: { authorization: `Bearer ${connection.token}` },
           onResync: () => void get().refreshLists(),
+          onCompaction: (notice) => get().noticeCompaction(notice),
         },
       );
       sse.start(0);
@@ -188,19 +275,9 @@ export const useStore = create<StoreState>((set, get) => ({
   ingest(event) {
     if (seen.has(event.event_id)) return;
     seen.add(event.event_id);
-    const events = [...get().events, event];
-    let cursor = get().cursor;
-    const seq = event.global_seq ?? event.rowid;
-    if (seq !== undefined && seq > cursor) cursor = seq;
-    if (events.length > EVENT_CAP) {
-      const dropped = events.splice(0, events.length - EVENT_CAP);
-      for (const d of dropped) seen.delete(d.event_id);
-    }
-    if (get().mode === 'team' && event.type.startsWith('session.')) {
-      set({ events, cursor, sessions: deriveSessions(events) });
-    } else {
-      set({ events, cursor });
-    }
+    pendingEvents.push(event);
+    if (pendingEvents.length >= EVENT_CAP) flushPendingEvents();
+    else if (!ingestTimer) ingestTimer = setTimeout(flushPendingEvents, INGEST_BATCH_MS);
   },
 
   setStatus(status) {
@@ -301,7 +378,12 @@ export const useStore = create<StoreState>((set, get) => ({
   },
 
   selectNotification(selectedNotificationId) {
-    set({ selectedNotificationId, selectedEventId: null, selectedTaskId: null, selectedSessionId: null });
+    set({
+      selectedNotificationId,
+      selectedEventId: null,
+      selectedTaskId: null,
+      selectedSessionId: null,
+    });
   },
 
   setPaletteOpen(paletteOpen) {
@@ -310,6 +392,18 @@ export const useStore = create<StoreState>((set, get) => ({
 
   setSettingsOpen(settingsOpen) {
     set({ settingsOpen });
+  },
+
+  setRetentionOpen(retentionOpen) {
+    set({ retentionOpen });
+  },
+
+  noticeCompaction(notice) {
+    set({ compactionNotice: notice });
+  },
+
+  clearCompactionNotice() {
+    set({ compactionNotice: null });
   },
 }));
 

@@ -99,6 +99,62 @@ describe('local API', () => {
     expect(res.statusCode).toBe(401);
   });
 
+  it('guards retention, previews without writes, and applies an explicit exact selection', async () => {
+    const denied = await api.app.inject({ method: 'GET', url: '/v1/retention/status' });
+    expect(denied.statusCode).toBe(401);
+    const old = { ...sampleEvent(), received_at: '2020-01-01T00:00:00.000Z' };
+    daemon.store.insertEvents([old], false);
+    const status = await api.app.inject({
+      method: 'GET',
+      url: '/v1/retention/status',
+      headers: auth(),
+    });
+    expect(status.statusCode).toBe(200);
+    expect(status.json().scheduler.destructiveApply).toBe(false);
+    const previewResponse = await api.app.inject({
+      method: 'POST',
+      url: '/v1/retention/preview',
+      headers: auth(),
+      payload: { cutoff: '2026-01-01T00:00:00.000Z', batchLimit: 10 },
+    });
+    expect(previewResponse.statusCode).toBe(200);
+    const preview = previewResponse.json();
+    expect(preview).toMatchObject({ dryRun: true, selectedRows: 1, sequenceKind: 'rowid' });
+    expect(daemon.store.countEvents()).toBe(1);
+    const invalid = await api.app.inject({
+      method: 'POST',
+      url: '/v1/retention/apply',
+      headers: auth(),
+      payload: {
+        runId: 'run_test',
+        fingerprint: preview.fingerprint,
+        cutoff: preview.cutoff,
+        policy: preview.policy,
+        confirm: false,
+      },
+    });
+    expect(invalid.statusCode).toBe(400);
+    const applied = await api.app.inject({
+      method: 'POST',
+      url: '/v1/retention/apply',
+      headers: auth(),
+      payload: {
+        runId: 'run_test',
+        fingerprint: preview.fingerprint,
+        cutoff: preview.cutoff,
+        policy: preview.policy,
+        confirm: true,
+      },
+    });
+    expect(applied.statusCode).toBe(200);
+    expect(applied.json()).toMatchObject({ committed: true, selectedRows: 1 });
+    expect(daemon.store.countEvents()).toBe(1); // synthetic summary remains
+    const events = await api.app.inject({ method: 'GET', url: '/v1/events', headers: auth() });
+    expect(events.json().ranges).toEqual([
+      expect.objectContaining({ sequenceKind: 'rowid', seqStart: 1, seqEnd: 1 }),
+    ]);
+  });
+
   it('ingests an event and serves it back over the query API', async () => {
     const ingest = await api.app.inject({
       method: 'POST',
@@ -1028,6 +1084,64 @@ describe('worktree API', () => {
 });
 
 describe('SSE stream', () => {
+  it('interleaves compacted notices with hot rows across interior gaps', async () => {
+    const old = '2020-01-01T00:00:00.000Z';
+    const telemetry = () => ({
+      ...sampleEvent('tool.post'),
+      ts: old,
+      received_at: old,
+    });
+    const protectedEvent = {
+      ...sampleEvent('task.created'),
+      payload: { version: 0 },
+      ts: old,
+      received_at: old,
+    };
+    daemon.store.insertEvents([telemetry(), protectedEvent, telemetry()], false);
+    const preview = daemon.retention.preview({ cutoff: '2026-01-01T00:00:00.000Z' });
+    daemon.retention.apply({
+      runId: ulid(),
+      fingerprint: preview.fingerprint,
+      cutoff: preview.cutoff,
+      policy: preview.policy,
+      confirm: true,
+    });
+
+    const address = await api.app.listen({ host: '127.0.0.1', port: 0 });
+    const controller = new AbortController();
+    const res = await fetch(`${address}/v1/stream?after=0`, {
+      headers: auth(),
+      signal: controller.signal,
+    });
+    const reader = res.body?.getReader();
+    if (!reader) throw new Error('no stream body');
+    const decoder = new TextDecoder();
+    let text = '';
+    try {
+      while (!text.includes('id: 5')) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        text += decoder.decode(value, { stream: true });
+      }
+    } finally {
+      controller.abort();
+    }
+    const ordered = text
+      .split('\n\n')
+      .filter((block) => block.includes('data:'))
+      .map((block) => {
+        if (block.startsWith('event: compacted')) {
+          const data = block
+            .split('\n')
+            .find((line) => line.startsWith('data:'))!
+            .slice(5);
+          return `compacted:${JSON.parse(data).seq_start}`;
+        }
+        return `event:${block.match(/^id: (\d+)$/m)?.[1]}`;
+      });
+    expect(ordered).toEqual(['compacted:1', 'event:2', 'compacted:3', 'event:4', 'event:5']);
+  });
+
   it('delivers catch-up events and resumes from Last-Event-ID', async () => {
     const address = await api.app.listen({ host: '127.0.0.1', port: 0 });
     daemon.ingest(sampleEvent('session.started'));

@@ -113,6 +113,87 @@ describe('team server bootstrap (real Postgres 16)', () => {
     expect(replayBody.duplicates).toHaveLength(1);
   });
 
+  it('exposes retention status to readers and preview/apply only to project admins', async () => {
+    const world = await seedWorld(server.db.pool);
+    const issue = async (role: 'admin' | 'viewer') => {
+      const res = await fetch(`${baseUrl}/v1/admin/tokens`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${adminSecret}`, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          projectId: world.projectA,
+          userId: role === 'admin' ? world.adminUser : world.viewerUser,
+          role,
+        }),
+      });
+      expect(res.status).toBe(201);
+      return (await res.json()) as { token: string };
+    };
+    const viewer = await issue('viewer');
+    const admin = await issue('admin');
+    await server.db.pool.query(
+      `INSERT INTO events(event_id,v,device_id,project_id,global_seq,ts,received_at,type,actor,payload,privacy)
+       VALUES($1,1,$2,$3,1,'2020-01-01T00:00:00Z','2020-01-01T00:00:00Z','tool.post',$4,$5,'metadata')`,
+      [
+        ulid(),
+        world.deviceId,
+        world.projectA,
+        JSON.stringify({ user_id: world.adminUser, agent: null }),
+        JSON.stringify({ tool_name: 'Read', success: true }),
+      ],
+    );
+    await server.db.pool.query(
+      'INSERT INTO project_stream_seq(project_id,last_seq,min_seq) VALUES($1,1,0)',
+      [world.projectA],
+    );
+    const status = await fetch(`${baseUrl}/v1/retention/status?projectId=${world.projectA}`, {
+      headers: { authorization: `Bearer ${viewer.token}` },
+    });
+    expect(status.status).toBe(200);
+    expect((await status.json()).scheduler.destructiveApply).toBe(false);
+    const denied = await fetch(`${baseUrl}/v1/retention/preview`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${viewer.token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ projectId: world.projectA, cutoff: '2026-01-01T00:00:00.000Z' }),
+    });
+    expect(denied.status).toBe(403);
+    const preview = await fetch(`${baseUrl}/v1/retention/preview`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${admin.token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ projectId: world.projectA, cutoff: '2026-01-01T00:00:00.000Z' }),
+    });
+    expect(preview.status).toBe(200);
+    const selection = await preview.json();
+    expect(selection.dryRun).toBe(true);
+    expect(selection.selectedRows).toBe(1);
+    const applyBody = {
+      projectId: world.projectA,
+      runId: `ret_${ulid()}`,
+      fingerprint: selection.fingerprint,
+      cutoff: selection.cutoff,
+      policy: selection.policy,
+      confirm: true,
+    };
+    const deniedApply = await fetch(`${baseUrl}/v1/retention/apply`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${viewer.token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(applyBody),
+    });
+    expect(deniedApply.status).toBe(403);
+    const applied = await fetch(`${baseUrl}/v1/retention/apply`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${admin.token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(applyBody),
+    });
+    expect(applied.status).toBe(200);
+    expect(await applied.json()).toMatchObject({ committed: true, selectedRows: 1 });
+    const events = await fetch(`${baseUrl}/v1/events?projectId=${world.projectA}&afterSeq=0`, {
+      headers: { authorization: `Bearer ${viewer.token}` },
+    });
+    expect((await events.json()).ranges).toEqual([
+      expect.objectContaining({ sequenceKind: 'global_seq', seqStart: 1, seqEnd: 1 }),
+    ]);
+  });
+
   it('serves a user-scoped inbox, triage, and directory over HTTP with RBAC', async () => {
     const world = await seedWorld(server.db.pool);
     const admin = { authorization: `Bearer ${adminSecret}`, 'content-type': 'application/json' };

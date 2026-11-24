@@ -2,11 +2,23 @@ import { metrics, type Logger } from '@weft/core';
 import type { LocalStore } from './store.js';
 
 const shipped = metrics.counter('weft_shipper_shipped_total', 'Events accepted by the server');
-const duplicated = metrics.counter('weft_shipper_duplicates_total', 'Replays deduplicated by the server');
-const rejected = metrics.counter('weft_shipper_rejected_total', 'Events rejected (poison pills removed)');
+const duplicated = metrics.counter(
+  'weft_shipper_duplicates_total',
+  'Replays deduplicated by the server',
+);
+const rejected = metrics.counter(
+  'weft_shipper_rejected_total',
+  'Events rejected (poison pills removed)',
+);
 const batches = metrics.counter('weft_shipper_batches_total', 'Ingest batches shipped');
-const errors = metrics.counter('weft_shipper_errors_total', 'Shipping failures (network/server/auth)');
-const compacted = metrics.counter('weft_shipper_compacted_total', 'Telemetry rows compacted from the outbox');
+const errors = metrics.counter(
+  'weft_shipper_errors_total',
+  'Shipping failures (network/server/auth)',
+);
+const compacted = metrics.counter(
+  'weft_shipper_compacted_total',
+  'Telemetry rows compacted from the outbox',
+);
 const pendingGauge = metrics.gauge('weft_outbox_pending', 'Unshipped outbox rows');
 
 interface IngestedRef {
@@ -46,8 +58,7 @@ export interface ShipperOptions {
 }
 
 type PostResult =
-  | { ok: true; data: ServerIngestResult }
-  | { ok: false; status: number; error: string };
+  { ok: true; data: ServerIngestResult } | { ok: false; status: number; error: string };
 
 /**
  * Drains the durable SQLite outbox to the team server. Each batch is a single
@@ -134,6 +145,10 @@ export class OutboxShipper {
     try {
       for (;;) {
         if (this.closed) break;
+        // Enforce the cap before every post, including when HTTP fails. The
+        // finally path also bounds a queue left by an interrupted earlier drain.
+        const removed = this.store.compactOutbox(this.maxOutboxRows);
+        if (removed > 0) compacted.inc(removed);
         const rows = this.store.pendingOutbox(this.batchSize);
         if (rows.length === 0) break;
         const ids = rows.map((r) => r.event_id);
@@ -168,7 +183,9 @@ export class OutboxShipper {
         const ackIds = [
           ...data.accepted.map((r) => r.event_id),
           ...data.duplicates.map((r) => r.event_id),
-          ...data.rejected.map((r) => r.event_id).filter((id): id is string => typeof id === 'string'),
+          ...data.rejected
+            .map((r) => r.event_id)
+            .filter((id): id is string => typeof id === 'string'),
         ];
         // A batch-level rejection (no per-event ids) cannot be acked; retain + back off.
         if (ackIds.length === 0 && data.rejected.length > 0) {
@@ -192,11 +209,10 @@ export class OutboxShipper {
         rejected.inc(data.rejected.length);
         batches.inc();
         this.backoff = this.baseBackoff;
-
-        const removed = this.store.compactOutbox(this.maxOutboxRows);
-        if (removed > 0) compacted.inc(removed);
       }
     } finally {
+      const finalRemoved = this.store.compactOutbox(this.maxOutboxRows);
+      if (finalRemoved > 0) compacted.inc(finalRemoved);
       pendingGauge.set(this.store.pendingOutboxCount());
     }
     return total;

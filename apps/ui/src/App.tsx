@@ -11,6 +11,9 @@ const CommandPalette = lazy(() =>
 const ConnectionSettings = lazy(() =>
   import('./components/ConnectionSettings.js').then((m) => ({ default: m.ConnectionSettings })),
 );
+const RetentionSettings = lazy(() =>
+  import('./components/RetentionSettings.js').then((m) => ({ default: m.RetentionSettings })),
+);
 
 export function App() {
   const init = useStore((s) => s.init);
@@ -22,6 +25,8 @@ export function App() {
   const setPaletteOpen = useStore((s) => s.setPaletteOpen);
   const settingsOpen = useStore((s) => s.settingsOpen);
   const setSettingsOpen = useStore((s) => s.setSettingsOpen);
+  const retentionOpen = useStore((s) => s.retentionOpen);
+  const setRetentionOpen = useStore((s) => s.setRetentionOpen);
 
   useEffect(() => {
     void init();
@@ -48,6 +53,12 @@ export function App() {
         </Suspense>
       )}
 
+      {retentionOpen && (
+        <Suspense fallback={null}>
+          <RetentionSettings onDone={() => setRetentionOpen(false)} />
+        </Suspense>
+      )}
+
       {!ready ? (
         <div className="flex h-full items-center justify-center bg-canvas">
           {error ? (
@@ -62,8 +73,9 @@ export function App() {
                 </p>
               ) : (
                 <p className="mb-4 text-xs text-fg-subtle">
-                  Start the local daemon (<code className="font-mono text-fg">weft daemon</code>) and
-                  reload. The UI connects to <code className="font-mono text-fg">127.0.0.1:7421</code>.
+                  Start the local daemon (<code className="font-mono text-fg">weft daemon</code>)
+                  and reload. The UI connects to{' '}
+                  <code className="font-mono text-fg">127.0.0.1:7421</code>.
                 </p>
               )}
               <div className="flex items-center justify-center gap-2">

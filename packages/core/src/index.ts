@@ -6,6 +6,7 @@ export * from './git-plumbing.js';
 export * from './attribution.js';
 export * from './exec.js';
 export * from './redaction.js';
+export * from './retention.js';
 export * from './db/sqlite.js';
 export * from './db/migrate.js';
 export * from './db/migrations/index.js';

@@ -60,6 +60,7 @@ import { MergeExecutorError } from './merge-executor.js';
 import { evaluateContractGates, type ContractGateConfig } from './contract-gates.js';
 import { draftEvent } from './events.js';
 import { CoordinationRpcError } from './coordination-rpc.js';
+import { RetentionError, validateRetentionPolicy } from '@weft/core';
 import type { StoredLocalEvent } from './store.js';
 
 const HEARTBEAT_MS = 15_000;
@@ -197,6 +198,22 @@ function worktreeErrorReply(reply: FastifyReply, err: WorktreeError): FastifyRep
   return reply.code(status).send({ error: err.code, message: err.message });
 }
 
+const RetentionPreviewBody = z.object({
+  cutoff: z.string().datetime({ offset: true }).optional(),
+  batchLimit: z.number().int().min(1).max(1000).optional(),
+});
+const RetentionApplyBody = z.object({
+  runId: z.string().min(1).max(200),
+  fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+  cutoff: z.string().datetime({ offset: true }),
+  policy: z.object({
+    version: z.literal('retention-allowlist-v1'),
+    cutoff: z.string().datetime({ offset: true }),
+    batchLimit: z.number().int().min(1).max(1000),
+    allowlist: z.array(z.string()),
+  }),
+  confirm: z.literal(true),
+});
 const RunValidationBody = z.object({
   task_id: z.string().min(1).optional(),
   candidate: z.string().min(1).optional(),
@@ -381,15 +398,27 @@ export function createApiServer(daemon: Daemon, options: ApiServerOptions = {}):
     }
   });
 
-  app.get('/healthz', async () => ({
-    ok: true,
-    version: PROTOCOL_VERSION,
-    mode: daemon.config.mode,
-    device_id: daemon.identity.device_id,
-    project_id: daemon.identity.project_id,
-    events: daemon.store.countEvents(),
-    pending: daemon.pipeline.pending,
-  }));
+  app.get('/healthz', async () => {
+    const memory = process.memoryUsage();
+    return {
+      ok: true,
+      version: PROTOCOL_VERSION,
+      mode: daemon.config.mode,
+      device_id: daemon.identity.device_id,
+      project_id: daemon.identity.project_id,
+      events: daemon.store.countEvents(),
+      pending: daemon.pipeline.pending,
+      runtime: {
+        uptime_ms: Math.round(process.uptime() * 1000),
+        rss_bytes: memory.rss,
+        heap_used_bytes: memory.heapUsed,
+        heap_total_bytes: memory.heapTotal,
+        external_bytes: memory.external,
+        array_buffers_bytes: memory.arrayBuffers,
+        active_resources: process.getActiveResourcesInfo().length,
+      },
+    };
+  });
 
   app.get('/v1/bootstrap', async () => ({
     device_id: daemon.identity.device_id,
@@ -411,7 +440,12 @@ export function createApiServer(daemon: Daemon, options: ApiServerOptions = {}):
   // Direct protocol-v1 ingest (synthetic adapters, generic agents, bench).
   app.post('/v1/events', async (req, reply) => {
     const result = daemon.ingest(req.body);
-    if (!result.accepted) return reply.code(422).send({ error: 'rejected', message: result.error });
+    if (!result.accepted) {
+      return reply.code(result.reason === 'backpressure' ? 503 : 422).send({
+        error: result.reason === 'backpressure' ? 'backpressure' : 'rejected',
+        message: result.error,
+      });
+    }
     return reply.code(202).send({ accepted: true, event_id: result.event_id });
   });
 
@@ -497,7 +531,50 @@ export function createApiServer(daemon: Daemon, options: ApiServerOptions = {}):
       ...(q.project_id ? { projectId: q.project_id } : {}),
       limit: q.limit ? Math.min(Number(q.limit), 1000) : 200,
     });
-    return { events, cursor: daemon.store.maxRowId() };
+    const cursor = daemon.store.maxRowId();
+    const after = q.after ? Number(q.after) : 0;
+    const through = events.length ? Number(events[events.length - 1]!.rowid ?? cursor) : cursor;
+    return {
+      events,
+      cursor,
+      ranges: daemon.store
+        .getRetentionRanges(daemon.identity.project_id, after)
+        .filter((range) => range.seqStart <= through),
+    };
+  });
+
+  app.get('/v1/retention/status', async () => daemon.retention.status());
+
+  app.post('/v1/retention/preview', async (req, reply) => {
+    const body = RetentionPreviewBody.safeParse(req.body ?? {});
+    if (!body.success)
+      return reply.code(400).send({ error: 'validation', message: body.error.message });
+    try {
+      return await daemon.retention.preview({
+        ...(body.data.cutoff !== undefined ? { cutoff: body.data.cutoff } : {}),
+        ...(body.data.batchLimit !== undefined ? { batchLimit: body.data.batchLimit } : {}),
+      });
+    } catch (err) {
+      if (err instanceof RetentionError)
+        return reply.code(err.status).send({ error: err.code, message: err.message });
+      throw err;
+    }
+  });
+
+  app.post('/v1/retention/apply', async (req, reply) => {
+    const body = RetentionApplyBody.safeParse(req.body ?? {});
+    if (!body.success)
+      return reply.code(400).send({ error: 'validation', message: body.error.message });
+    try {
+      return await daemon.retention.apply({
+        ...body.data,
+        policy: validateRetentionPolicy(body.data.policy),
+      });
+    } catch (err) {
+      if (err instanceof RetentionError)
+        return reply.code(err.status).send({ error: err.code, message: err.message });
+      throw err;
+    }
   });
 
   app.get('/v1/sessions', async () => ({ sessions: daemon.store.getSessions() }));
@@ -663,10 +740,33 @@ export function createApiServer(daemon: Daemon, options: ApiServerOptions = {}):
     let lastSent = cursor;
     const drain = (): void => {
       const fresh = daemon.store.getEvents({ afterRowId: lastSent, limit: CATCH_UP_LIMIT });
+      const through = fresh.length ? Number(fresh[fresh.length - 1]!.rowid ?? lastSent) : lastSent;
+      const ranges = daemon.store
+        .getRetentionRanges(daemon.identity.project_id, lastSent)
+        .filter((range) => range.seqStart <= through);
+      let rangeIndex = 0;
+      const writeRangesThrough = (sequence: number): void => {
+        while (rangeIndex < ranges.length && ranges[rangeIndex]!.seqStart <= sequence) {
+          const range = ranges[rangeIndex++]!;
+          reply.raw.write(
+            `event: compacted\ndata: ${JSON.stringify({
+              sequence_kind: 'rowid',
+              seq_start: range.seqStart,
+              seq_end: range.seqEnd,
+              run_id: range.runId,
+              summary_event_id: range.summaryEventId,
+            })}\n\n`,
+          );
+        }
+      };
+      // Interleave notices with hot rows so an interior gap is explicit at its
+      // exact stream position rather than being broadcast ahead of earlier rows.
       for (const event of fresh) {
+        if (event.rowid !== undefined) writeRangesThrough(event.rowid);
         writeEvent(reply, event);
         if (event.rowid !== undefined) lastSent = event.rowid;
       }
+      writeRangesThrough(through);
     };
     drain();
 

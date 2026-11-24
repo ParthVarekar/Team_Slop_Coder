@@ -37,6 +37,7 @@ import { OverlapEngine } from './overlap.js';
 import { ResolverClient } from './resolver.js';
 import { ModuleGraphService } from './module-graph.js';
 import { HandoffService } from './handoff-service.js';
+import { LocalRetentionService } from './retention.js';
 
 const DAEMON_VERSION = '0.0.0';
 
@@ -58,6 +59,7 @@ export class Daemon {
   readonly identity: DeviceIdentity;
   readonly store: LocalStore;
   readonly pipeline: EventPipeline;
+  readonly retention: LocalRetentionService;
   readonly tasks: LocalTaskStore;
   readonly repos: RepoRegistry;
   readonly indexer: Indexer;
@@ -108,6 +110,16 @@ export class Daemon {
       logger: this.logger,
       onFlush: (events) => {
         for (const listener of this.flushListeners) listener(events);
+      },
+    });
+    this.retention = new LocalRetentionService(this.store, {
+      projectId: this.identity.project_id,
+      telemetryDays: this.config.retention.telemetryDays,
+      batchLimit: this.config.retention.batchLimit,
+      schedulerEnabled: this.config.retention.schedulerEnabled,
+      logger: this.logger,
+      onCommit: () => {
+        for (const listener of this.flushListeners) listener([]);
       },
     });
     this.source = { deviceId: this.identity.device_id, projectId: this.identity.project_id };
@@ -288,6 +300,7 @@ export class Daemon {
     } catch (err) {
       this.logger.warn({ err }, 'git not detected; running in observe-only mode');
     }
+    this.retention.start();
     await this.watcher.start();
     this.shipper?.start();
     this.coordination?.start();
@@ -332,6 +345,7 @@ export class Daemon {
 
   async stop(): Promise<void> {
     if (!this.started) return;
+    await this.retention.stop();
     await this.watcher.stop();
     this.pipeline.stop();
     await this.coordination?.stop();

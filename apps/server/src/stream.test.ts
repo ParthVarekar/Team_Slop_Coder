@@ -104,7 +104,11 @@ class SseClient {
       else if (line.startsWith('data:')) data.push(line.slice(5).trim());
     }
     if (data.length === 0 && !event) return;
-    this.frames.push({ ...(id !== undefined ? { id } : {}), ...(event !== undefined ? { event } : {}), data: data.join('\n') });
+    this.frames.push({
+      ...(id !== undefined ? { id } : {}),
+      ...(event !== undefined ? { event } : {}),
+      data: data.join('\n'),
+    });
   }
 
   dataEvents(): { global_seq: number; type: string; project_id: string }[] {
@@ -154,10 +158,15 @@ async function ingest(projectId: string, token: string, events: unknown[]): Prom
 async function freshProject(): Promise<{ projectId: string; token: string }> {
   const projectId = makeId('project');
   await pool.query('INSERT INTO projects (id, team_id, name, slug) VALUES ($1, $2, $3, $4)', [
-    projectId, world.teamId, 'Stream Project', `p-${projectId}`,
+    projectId,
+    world.teamId,
+    'Stream Project',
+    `p-${projectId}`,
   ]);
   await pool.query('INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, $3)', [
-    projectId, world.memberUser, 'member',
+    projectId,
+    world.memberUser,
+    'member',
   ]);
   const res = await app.inject({
     method: 'POST',
@@ -180,7 +189,10 @@ describe('server SSE fan-out (real Postgres 16)', () => {
       await client.waitUntil(() => client.dataEvents().length >= 1);
       expect(client.dataEvents()[0].global_seq).toBe(1);
       // Live fan-out: a new ingest wakes the connected subscriber.
-      await ingest(projectId, token, [ev(projectId, 'tool.post', toolPost), ev(projectId, 'tool.post', toolPost)]);
+      await ingest(projectId, token, [
+        ev(projectId, 'tool.post', toolPost),
+        ev(projectId, 'tool.post', toolPost),
+      ]);
       await client.waitUntil(() => client.dataEvents().length >= 3);
       expect(client.dataEvents().map((e) => e.global_seq)).toEqual([1, 2, 3]);
       expect(client.dataEvents().every((e) => e.project_id === projectId)).toBe(true);
@@ -207,9 +219,15 @@ describe('server SSE fan-out (real Postgres 16)', () => {
 
   it('forces an explicit resync when the cursor is below the min_seq watermark', async () => {
     const { projectId, token } = await freshProject();
-    await ingest(projectId, token, Array.from({ length: 5 }, () => ev(projectId, 'tool.post', toolPost)));
+    await ingest(
+      projectId,
+      token,
+      Array.from({ length: 5 }, () => ev(projectId, 'tool.post', toolPost)),
+    );
     // Simulate retention advancing the watermark past the client's cursor.
-    await pool.query('UPDATE project_stream_seq SET min_seq = 4 WHERE project_id = $1', [projectId]);
+    await pool.query('UPDATE project_stream_seq SET min_seq = 4 WHERE project_id = $1', [
+      projectId,
+    ]);
     const client = await SseClient.connect('/v1/stream', token, 2);
     try {
       await client.waitUntil(() => client.dataEvents().length >= 2);
@@ -218,6 +236,76 @@ describe('server SSE fan-out (real Postgres 16)', () => {
       expect(JSON.parse(resync!.data)).toMatchObject({ min_seq: 4 });
       // Never a silent skip: resumes at the earliest available event (seq 4).
       expect(client.dataEvents().map((e) => e.global_seq)).toEqual([4, 5]);
+    } finally {
+      client.close();
+    }
+  });
+
+  it('emits a compacted prefix notice without moving the resume cursor past live events', async () => {
+    const { projectId, token } = await freshProject();
+    await ingest(
+      projectId,
+      token,
+      Array.from({ length: 5 }, () => ev(projectId, 'tool.post', toolPost)),
+    );
+    await pool.query('DELETE FROM events WHERE project_id=$1 AND global_seq=ANY($2::bigint[])', [
+      projectId,
+      [1, 2],
+    ]);
+    await pool.query('UPDATE project_stream_seq SET min_seq = 3 WHERE project_id = $1', [
+      projectId,
+    ]);
+    await pool.query(
+      `INSERT INTO retention_ranges(project_id,run_id,sequence_kind,seq_start,seq_end,selected_count,payload_bytes,type_counts)
+      VALUES($1,'run_prefix','global_seq',1,2,2,20,'{"tool.post":2}')`,
+      [projectId],
+    );
+    const client = await SseClient.connect('/v1/stream', token, 0);
+    try {
+      await client.waitUntil(() => client.dataEvents().length >= 3);
+      expect(client.dataEvents().map((e) => e.global_seq)).toEqual([3, 4, 5]);
+      const ordered = client.frames
+        .filter((frame) => frame.event === 'compacted' || (!frame.event && frame.data))
+        .map((frame) =>
+          frame.event === 'compacted'
+            ? `compacted:${JSON.parse(frame.data).seq_start}`
+            : `event:${JSON.parse(frame.data).global_seq}`,
+        );
+      expect(ordered).toEqual(['compacted:1', 'event:3', 'event:4', 'event:5']);
+    } finally {
+      client.close();
+    }
+  });
+
+  it('emits explicit compacted control frames at exact interior gaps', async () => {
+    const { projectId, token } = await freshProject();
+    await ingest(
+      projectId,
+      token,
+      Array.from({ length: 5 }, () => ev(projectId, 'tool.post', toolPost)),
+    );
+    await pool.query('DELETE FROM events WHERE project_id=$1 AND global_seq=ANY($2::bigint[])', [
+      projectId,
+      [2, 4],
+    ]);
+    await pool.query(
+      `INSERT INTO retention_ranges(project_id,run_id,sequence_kind,seq_start,seq_end,selected_count,payload_bytes,type_counts)
+      VALUES($1,'run_gap_2','global_seq',2,2,1,10,'{"tool.post":1}'),
+            ($1,'run_gap_4','global_seq',4,4,1,10,'{"tool.post":1}')`,
+      [projectId],
+    );
+    const client = await SseClient.connect('/v1/stream', token, 0);
+    try {
+      await client.waitUntil(() => client.dataEvents().length >= 3);
+      expect(client.dataEvents().map((e) => e.global_seq)).toEqual([1, 3, 5]);
+      const ordered = client.frames
+        .filter((frame) => frame.event === 'compacted' || (!frame.event && frame.data))
+        .map((frame) =>
+          frame.event === 'compacted'
+            ? `compacted:${JSON.parse(frame.data).seq_start}`
+            : `event:${JSON.parse(frame.data).global_seq}`,
+        );
+      expect(ordered).toEqual(['event:1', 'compacted:2', 'event:3', 'compacted:4', 'event:5']);
     } finally {
       client.close();
     }
@@ -239,7 +327,9 @@ describe('server SSE fan-out (real Postgres 16)', () => {
       await coord.waitUntil(() => coord.dataEvents().length >= 3);
       await team.waitUntil(() => team.dataEvents().length >= 6);
       expect(coord.dataEvents().map((e) => e.type)).toEqual([
-        'task.claimed', 'conflict.detected', 'reservation.acquired',
+        'task.claimed',
+        'conflict.detected',
+        'reservation.acquired',
       ]);
       expect(team.dataEvents()).toHaveLength(6);
     } finally {

@@ -61,7 +61,14 @@ export const WeftConfigSchema = z.object({
       checks: z.array(ValidationCheckConfigSchema).max(50).default([]),
     })
     .default({}),
-  retention: z.object({ telemetryDays: z.number().int().positive().default(90) }).default({}),
+  retention: z
+    .object({
+      telemetryDays: z.number().int().positive().default(90),
+      /** Preview scheduling may be enabled; destructive apply is always manual. */
+      schedulerEnabled: z.boolean().default(false),
+      batchLimit: z.number().int().min(1).max(1000).default(1000),
+    })
+    .default({}),
   recap: z
     .object({
       enabled: z.boolean().default(false),
@@ -105,6 +112,8 @@ export const WEFT_ENV_MAP: Record<string, string> = {
   WEFT_VALIDATION_TIMEOUT_MS: 'validation.timeoutMs',
   WEFT_VALIDATION_CONCURRENCY: 'validation.concurrency',
   WEFT_TELEMETRY_DAYS: 'retention.telemetryDays',
+  WEFT_RETENTION_SCHEDULER: 'retention.schedulerEnabled',
+  WEFT_RETENTION_BATCH_LIMIT: 'retention.batchLimit',
   WEFT_RECAP_ENABLED: 'recap.enabled',
   WEFT_RECAP_ENDPOINT: 'recap.endpoint',
   WEFT_RECAP_TOKEN: 'recap.token',

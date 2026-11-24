@@ -251,6 +251,39 @@ describe('EventPipeline', () => {
     store.close();
   });
 
+  it('bounds the buffer and retries a failed write without accepting overflow', () => {
+    vi.useFakeTimers();
+    try {
+      const store = openStore();
+      vi.spyOn(store, 'insertEvents').mockImplementationOnce(() => {
+        throw new Error('simulated transient write failure');
+      });
+      const pipeline = new EventPipeline(store, {
+        batchSize: 1,
+        flushIntervalMs: 50,
+        maxBufferedEvents: 1,
+      });
+      const src = source();
+      expect(
+        pipeline.enqueue(event(src, 'tool.post', { tool_name: 'Read', success: true })).accepted,
+      ).toBe(true);
+      expect(pipeline.pending).toBe(1);
+      expect(
+        pipeline.enqueue(event(src, 'tool.post', { tool_name: 'Read', success: true })),
+      ).toMatchObject({
+        accepted: false,
+        reason: 'backpressure',
+      });
+      vi.advanceTimersByTime(50);
+      expect(pipeline.pending).toBe(0);
+      expect(store.countEvents()).toBe(1);
+      pipeline.stop();
+      store.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('replays a recovered batch idempotently after reopen (crash recovery)', () => {
     const src = source();
     const store = openStore();

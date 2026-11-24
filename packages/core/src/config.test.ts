@@ -40,6 +40,8 @@ describe('loadConfig layering', () => {
     expect(cfg.hooks.port).toBe(1234);
     expect(cfg.privacy.redactSecrets).toBe(false);
     expect(cfg.retention.telemetryDays).toBe(7);
+    expect(cfg.retention.schedulerEnabled).toBe(false);
+    expect(cfg.retention.batchLimit).toBe(1000);
   });
 
   it('rejects invalid values', () => {

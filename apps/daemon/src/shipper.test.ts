@@ -54,8 +54,12 @@ function fakeServer() {
     if (mode === 'http500')
       return new Response(JSON.stringify({ error: 'internal' }), { status: 500 });
     if (mode === 'http401')
-      return new Response(JSON.stringify({ error: 'unauthorized', reason: 'unknown_token' }), { status: 401 });
-    const body = JSON.parse(String((init as RequestInit).body)) as { events: { event_id: string; device_id: string }[] };
+      return new Response(JSON.stringify({ error: 'unauthorized', reason: 'unknown_token' }), {
+        status: 401,
+      });
+    const body = JSON.parse(String((init as RequestInit).body)) as {
+      events: { event_id: string; device_id: string }[];
+    };
     const accepted: { event_id: string; global_seq: number; received_at: string }[] = [];
     const duplicates: typeof accepted = [];
     const rejected: { event_id: string; error: string }[] = [];
@@ -68,14 +72,24 @@ function fakeServer() {
       const prior = seen.get(key);
       if (prior) {
         prior.count += 1;
-        duplicates.push({ event_id: e.event_id, global_seq: prior.seq, received_at: new Date().toISOString() });
+        duplicates.push({
+          event_id: e.event_id,
+          global_seq: prior.seq,
+          received_at: new Date().toISOString(),
+        });
       } else {
         seq += 1;
         seen.set(key, { seq, count: 1 });
-        accepted.push({ event_id: e.event_id, global_seq: seq, received_at: new Date().toISOString() });
+        accepted.push({
+          event_id: e.event_id,
+          global_seq: seq,
+          received_at: new Date().toISOString(),
+        });
       }
     }
-    return new Response(JSON.stringify({ accepted, duplicates, rejected, streams: {} }), { status: 202 });
+    return new Response(JSON.stringify({ accepted, duplicates, rejected, streams: {} }), {
+      status: 202,
+    });
   };
   return {
     fetchImpl,
@@ -87,7 +101,11 @@ function fakeServer() {
   };
 }
 
-function shipper(store: LocalStore, server: ReturnType<typeof fakeServer>, opts: Partial<ConstructorParameters<typeof OutboxShipper>[0]> = {}) {
+function shipper(
+  store: LocalStore,
+  server: ReturnType<typeof fakeServer>,
+  opts: Partial<ConstructorParameters<typeof OutboxShipper>[0]> = {},
+) {
   return new OutboxShipper({
     baseUrl: 'http://server.test',
     token: 'weft_test',
@@ -105,7 +123,10 @@ describe('OutboxShipper', () => {
     const store = openStore();
     const src = source();
     store.insertEvents(
-      [event(src, 'tool.post', { tool_name: 'Read', success: true }), event(src, 'task.created', { version: 0 })],
+      [
+        event(src, 'tool.post', { tool_name: 'Read', success: true }),
+        event(src, 'task.created', { version: 0 }),
+      ],
       true,
     );
     expect(store.pendingOutboxCount()).toBe(2);
@@ -140,7 +161,9 @@ describe('OutboxShipper', () => {
   it('retains the outbox on network failure and recovers with zero loss', async () => {
     const store = openStore();
     const src = source();
-    const batch = Array.from({ length: 5 }, () => event(src, 'tool.post', { tool_name: 'Read', success: true }));
+    const batch = Array.from({ length: 5 }, () =>
+      event(src, 'tool.post', { tool_name: 'Read', success: true }),
+    );
     store.insertEvents(batch, true);
     const server = fakeServer();
     server.setMode('network');
@@ -196,8 +219,12 @@ describe('OutboxShipper', () => {
   it('compacts oldest telemetry first but never drops coordination rows', async () => {
     const store = openStore();
     const src = source();
-    const telemetry = Array.from({ length: 10 }, () => event(src, 'tool.post', { tool_name: 'Read', success: true }));
-    const coordination = Array.from({ length: 3 }, () => event(src, 'task.created', { version: 0 }));
+    const telemetry = Array.from({ length: 10 }, () =>
+      event(src, 'tool.post', { tool_name: 'Read', success: true }),
+    );
+    const coordination = Array.from({ length: 3 }, () =>
+      event(src, 'task.created', { version: 0 }),
+    );
     store.insertEvents([...telemetry, ...coordination], true);
     expect(store.pendingOutboxCount()).toBe(13);
     // Budget 5: excess 8 removed from oldest telemetry; coordination untouched.
@@ -215,8 +242,12 @@ describe('OutboxShipper', () => {
   it('bounds the outbox during shipping while preserving every coordination event', async () => {
     const store = openStore();
     const src = source();
-    const telemetry = Array.from({ length: 10 }, () => event(src, 'tool.post', { tool_name: 'Read', success: true }));
-    const coordination = Array.from({ length: 3 }, () => event(src, 'task.created', { version: 0 }));
+    const telemetry = Array.from({ length: 10 }, () =>
+      event(src, 'tool.post', { tool_name: 'Read', success: true }),
+    );
+    const coordination = Array.from({ length: 3 }, () =>
+      event(src, 'task.created', { version: 0 }),
+    );
     store.insertEvents([...telemetry, ...coordination], true);
     const server = fakeServer();
     const s = shipper(store, server, { batchSize: 2, maxOutboxRows: 3 });
@@ -236,21 +267,25 @@ describe('OutboxShipper', () => {
     const store = openStore();
     store.insertEvents(batch, true);
     const server = fakeServer();
-    // Ship half, then "crash" (close) before acking the rest.
+    // Simulate a network outage and close before anything was acknowledged.
+    server.setMode('network');
     const s1 = shipper(store, server, { batchSize: 2 });
     await s1.drain();
-    expect(server.seen.size).toBe(4); // batchSize 2 still loops until empty
+    expect(store.pendingOutboxCount()).toBe(4);
     await s1.stop();
     store.close();
-    // Reopen: nothing pending (all acked). Re-ingesting the same ids is idempotent.
     const reopened = openStore();
-    expect(reopened.pendingOutboxCount()).toBe(0);
-    reopened.insertEvents(batch, true); // INSERT OR IGNORE: events dedup, outbox refilled
+    expect(reopened.pendingOutboxCount()).toBe(4);
+    server.setMode('ok');
     const s2 = shipper(reopened, server, { batchSize: 2 });
     const result = await s2.drain();
-    expect(result.duplicates).toBe(4);
+    expect(result.shipped).toBe(4);
+    expect(result.duplicates).toBe(0);
     expect(reopened.pendingOutboxCount()).toBe(0);
-    expect([...server.seen.values()].every((v) => v.count === 2)).toBe(true);
+    expect([...server.seen.values()].every((v) => v.count === 1)).toBe(true);
+    // Replay of acknowledged hot events neither resurrects them nor refills outbox.
+    reopened.insertEvents(batch, true);
+    expect(reopened.pendingOutboxCount()).toBe(0);
     await s2.stop();
     reopened.close();
   });

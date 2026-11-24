@@ -1,4 +1,14 @@
-import type { Bootstrap, Repo, Session, Task, WeftEvent } from '../lib/types.js';
+import type {
+  Bootstrap,
+  Repo,
+  RetentionPolicy,
+  RetentionPreview,
+  RetentionResult,
+  RetentionStatus,
+  Session,
+  Task,
+  WeftEvent,
+} from '../lib/types.js';
 
 let secret = '';
 
@@ -56,7 +66,22 @@ export interface CreateTaskInput {
 export const api = {
   health: () => getJson<Health>('/healthz'),
   events: (after = 0) =>
-    getJson<{ events: WeftEvent[]; cursor: number }>(`/v1/events?after=${after}&limit=1000`),
+    getJson<{
+      events: WeftEvent[];
+      cursor: number;
+      ranges?: { sequenceKind: string; seqStart: number; seqEnd: number }[];
+    }>(`/v1/events?after=${after}&limit=1000`),
+  retentionStatus: () => getJson<RetentionStatus>('/v1/retention/status'),
+  retentionPreview: (cutoff: string, batchLimit: number) =>
+    sendJson<RetentionPreview>('POST', '/v1/retention/preview', { cutoff, batchLimit }),
+  retentionApply: (preview: RetentionPreview, runId: string) =>
+    sendJson<RetentionResult>('POST', '/v1/retention/apply', {
+      runId,
+      fingerprint: preview.fingerprint,
+      cutoff: preview.cutoff,
+      policy: preview.policy satisfies RetentionPolicy,
+      confirm: true,
+    }),
   sessions: () => getJson<{ sessions: Session[] }>('/v1/sessions'),
   tasks: () => getJson<{ tasks: Task[] }>('/v1/tasks'),
   repos: () => getJson<{ repos: Repo[]; backend: string | null }>('/v1/repos'),
