@@ -1,0 +1,80 @@
+{
+  "milestone": "M5.5",
+  "date": "2026-11-25",
+  "environment": {
+    "node": "v24.15.0",
+    "platform": "win32-x64",
+    "cpuProfile": "bench/artifacts/profiles (local, not committed)"
+  },
+  "methodology": {
+    "before": "One clean full-suite run and one clean real LocalStore run before edits.",
+    "after": "Median of three clean runs after edits; higher throughput is better.",
+    "selection": "CPU profile plus measured hot-path benchmark rows. Protocol parsing was profiled but left unchanged because same-process A/B results were within noise.",
+    "limitations": "Single-machine microbenchmarks; no claim of proportional production latency improvement."
+  },
+  "optimizations": [
+    {
+      "name": "redact_strings",
+      "unit": "ops/s",
+      "before": 876561,
+      "afterMedian": 921265,
+      "afterRuns": [921265, 932620, 913377],
+      "improvementPercent": 5.1,
+      "change": "Added a necessary-condition prefilter and per-rule hints so benign text avoids eighteen secret regex scans and secret-bearing text scans only relevant rules. ASCII entropy counting uses a fixed table; Unicode behavior is unchanged.",
+      "safety": "Default and custom-rule paths are differentially tested; the full planted-secret corpus and generated-text equivalence checks must pass."
+    },
+    {
+      "name": "hook_path_enqueue",
+      "unit": "ops/s",
+      "before": 145157,
+      "afterMedian": 157738,
+      "afterRuns": [157738, 159332, 156083],
+      "improvementPercent": 8.7,
+      "change": "Benefits from the redaction fast path without weakening envelope or payload validation.",
+      "safety": "Protocol parsing remains Zod-based and unchanged."
+    },
+    {
+      "name": "local_store_batch_insert",
+      "unit": "events/s",
+      "before": 102125,
+      "afterMedian": 149979,
+      "afterRuns": [150280, 149979, 148844],
+      "improvementPercent": 46.9,
+      "workload": {
+        "events": 50000,
+        "batchSize": 100,
+        "teamMode": true,
+        "includes": ["events", "coordination mirror", "outbox"]
+      },
+      "change": "Replaced per-row INSERT statements with cached multi-row INSERT OR IGNORE statements in bounded chunks while preserving one transaction per batch.",
+      "safety": "Mixed 205-row chunk-boundary, duplicate, and forced-outbox-failure rollback tests must pass."
+    }
+  ],
+  "artifacts": {
+    "microBefore": "bench/artifacts/runs/2026-11-24T20-03-34-122Z.json",
+    "microAfter": [
+      "bench/artifacts/runs/2026-11-24T20-21-53-290Z.json",
+      "bench/artifacts/runs/2026-11-24T20-21-56-420Z.json",
+      "bench/artifacts/runs/2026-11-24T20-21-59-519Z.json"
+    ],
+    "storeBefore": "bench/artifacts/runs/store-batch-2026-11-24T20-08-43-033Z.json",
+    "storeAfter": [
+      "bench/artifacts/runs/store-batch-2026-11-24T20-22-11-780Z.json",
+      "bench/artifacts/runs/store-batch-2026-11-24T20-22-12-936Z.json",
+      "bench/artifacts/runs/store-batch-2026-11-24T20-22-14-061Z.json"
+    ]
+  },
+  "verification": {
+    "build": "PASS",
+    "typecheck": "PASS",
+    "lint": "PASS",
+    "tests": "PASS: 68 files, 799 tests",
+    "scopedFormatCheck": "PASS"
+  },
+  "regressionGates": {
+    "symbolIndex": "PASS: 10000 files, full 10168ms, p95 0.5ms, marginal RSS 21.9MB",
+    "overlapStorm": "PASS: idle 0.4ms, single-branch 11.86ms, gate 100ms",
+    "uiMainGzipBytes": 104817,
+    "uiBudgetGzipBytes": 307200
+  }
+}

@@ -97,25 +97,50 @@ export interface FileIndexRow extends FileIndexState {
 
 const EVENT_COLUMNS = `event_id, v, device_id, project_id, repo_id, session_id, provider_session_id,
   task_id, seq, ts, type, actor, payload, privacy, received_at`;
+const EVENT_COLUMN_COUNT = 15;
+const COORDINATION_COLUMN_COUNT = 14;
+const INSERT_CHUNK_SIZE = 100;
+type Statement = ReturnType<SqliteDatabase['prepare']>;
 
-function eventParams(e: StoredLocalEvent): Record<string, unknown> {
-  return {
-    event_id: e.event_id,
-    v: e.v,
-    device_id: e.device_id,
-    project_id: e.project_id,
-    repo_id: e.repo_id ?? null,
-    session_id: e.session_id ?? null,
-    provider_session_id: e.provider_session_id ?? null,
-    task_id: e.task_id ?? null,
-    seq: e.seq ?? null,
-    ts: e.ts,
-    type: e.type,
-    actor: JSON.stringify(e.actor),
-    payload: JSON.stringify(e.payload),
-    privacy: e.privacy,
-    received_at: e.received_at ?? new Date().toISOString(),
-  };
+function eventParams(e: StoredLocalEvent): unknown[] {
+  return [
+    e.event_id,
+    e.v,
+    e.device_id,
+    e.project_id,
+    e.repo_id ?? null,
+    e.session_id ?? null,
+    e.provider_session_id ?? null,
+    e.task_id ?? null,
+    e.seq ?? null,
+    e.ts,
+    e.type,
+    JSON.stringify(e.actor),
+    JSON.stringify(e.payload),
+    e.privacy,
+    e.received_at ?? new Date().toISOString(),
+  ];
+}
+
+function insertRows(
+  db: SqliteDatabase,
+  statements: Map<number, Statement>,
+  prefix: string,
+  columnCount: number,
+  rows: unknown[][],
+): void {
+  for (let offset = 0; offset < rows.length; offset += INSERT_CHUNK_SIZE) {
+    const chunk = rows.slice(offset, offset + INSERT_CHUNK_SIZE);
+    let statement = statements.get(chunk.length);
+    if (!statement) {
+      const placeholders = `(${Array(columnCount).fill('?').join(',')})`;
+      statement = db.prepare(
+        `${prefix} VALUES ${Array(chunk.length).fill(placeholders).join(',')}`,
+      );
+      statements.set(chunk.length, statement);
+    }
+    statement.run(chunk.flat());
+  }
 }
 
 interface EventRow {
@@ -159,6 +184,10 @@ function rowToEvent(row: EventRow): StoredLocalEvent {
 }
 
 export class LocalStore {
+  private readonly eventStatements = new Map<number, Statement>();
+  private readonly coordinationStatements = new Map<number, Statement>();
+  private readonly outboxStatements = new Map<number, Statement>();
+
   constructor(readonly db: SqliteDatabase) {}
 
   static open(dataDir: string): LocalStore {
@@ -171,36 +200,48 @@ export class LocalStore {
   /** Atomically persist a batch; durable types mirrored to coordination_events. */
   insertEvents(events: StoredLocalEvent[], teamMode: boolean): void {
     if (events.length === 0) return;
-    const insertEvent = this.db.prepare(
-      `INSERT OR IGNORE INTO events (${EVENT_COLUMNS})
-       VALUES (@event_id, @v, @device_id, @project_id, @repo_id, @session_id, @provider_session_id,
-               @task_id, @seq, @ts, @type, @actor, @payload, @privacy, @received_at)`,
+    const rows = events.map(eventParams);
+    const durableRows = events.flatMap((event, index) =>
+      isCoordinationEvent(event.type) ? [rows[index]!.filter((_, column) => column !== 6)] : [],
     );
-    const insertCoord = this.db.prepare(
-      `INSERT OR IGNORE INTO coordination_events
-         (event_id, v, device_id, project_id, repo_id, session_id, task_id, seq, ts, type, actor, payload, privacy, received_at)
-       VALUES (@event_id, @v, @device_id, @project_id, @repo_id, @session_id, @task_id, @seq, @ts, @type, @actor, @payload, @privacy, @received_at)`,
-    );
-    const insertOutbox = this.db.prepare(
-      `INSERT OR IGNORE INTO outbox (event_id, kind, envelope, created_at) VALUES (?, ?, ?, ?)`,
-    );
-    const tx = this.db.transaction((batch: StoredLocalEvent[]) => {
-      for (const e of batch) {
-        const params = eventParams(e);
-        insertEvent.run(params);
-        const durable = isCoordinationEvent(e.type);
-        if (durable) insertCoord.run(params);
-        if (teamMode) {
-          insertOutbox.run(
-            e.event_id,
-            durable ? 'coordination' : 'telemetry',
-            JSON.stringify(e),
-            e.received_at,
-          );
-        }
+    const outboxRows = teamMode
+      ? events.map((event) => [
+          event.event_id,
+          isCoordinationEvent(event.type) ? 'coordination' : 'telemetry',
+          JSON.stringify(event),
+          event.received_at,
+        ])
+      : [];
+    const tx = this.db.transaction(() => {
+      insertRows(
+        this.db,
+        this.eventStatements,
+        `INSERT OR IGNORE INTO events (${EVENT_COLUMNS})`,
+        EVENT_COLUMN_COUNT,
+        rows,
+      );
+      if (durableRows.length > 0) {
+        insertRows(
+          this.db,
+          this.coordinationStatements,
+          `INSERT OR IGNORE INTO coordination_events
+             (event_id, v, device_id, project_id, repo_id, session_id, task_id, seq, ts, type,
+              actor, payload, privacy, received_at)`,
+          COORDINATION_COLUMN_COUNT,
+          durableRows,
+        );
+      }
+      if (outboxRows.length > 0) {
+        insertRows(
+          this.db,
+          this.outboxStatements,
+          'INSERT OR IGNORE INTO outbox (event_id, kind, envelope, created_at)',
+          4,
+          outboxRows,
+        );
       }
     });
-    tx(events);
+    tx();
   }
 
   getEvents(query: EventQuery = {}): StoredLocalEvent[] {

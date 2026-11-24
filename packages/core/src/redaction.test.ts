@@ -152,6 +152,44 @@ describe('redaction false-positive guards', () => {
     expect(result.text).toBe(text);
   });
 
+  it('matches unfiltered rule scans for corpus and benign text', () => {
+    const unfiltered = new Redactor({
+      rules: SECRET_RULES.map(({ hint: _hint, ...rule }) => rule),
+    });
+    for (const text of [...CORPUS.map((entry) => entry.text), ...BENIGN]) {
+      expect(new Redactor().redact(text)).toEqual(unfiltered.redact(text));
+    }
+  });
+
+  it('matches unfiltered rule scans for generated text', () => {
+    const unfiltered = new Redactor({
+      rules: SECRET_RULES.map(({ hint: _hint, ...rule }) => rule),
+    });
+    const text = fc.oneof(
+      { depth: 1 },
+      fc.string(),
+      fc.constantFrom(...CORPUS.map((entry) => entry.text), ...BENIGN),
+    );
+    fc.assert(
+      fc.property(text, fc.string(), fc.string(), (value, before, after) => {
+        const input = `${before}${value}${after}`;
+        expect(new Redactor().redact(input)).toEqual(unfiltered.redact(input));
+      }),
+      { numRuns: 500 },
+    );
+  });
+
+  it('does not apply the default prefilter to custom rules', () => {
+    const custom = new Redactor({
+      rules: [{ id: 'custom', description: 'custom marker', regex: /CUSTOM-[0-9]+/dg }],
+      entropyThreshold: 0,
+    });
+    expect(custom.redact('value CUSTOM-123')).toEqual({
+      text: 'value [REDACTED:custom]',
+      redactions: [{ ruleId: 'custom', start: 6, end: 16 }],
+    });
+  });
+
   it('is idempotent', () => {
     for (const { text } of CORPUS) {
       const once = redact(text);
