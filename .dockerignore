@@ -1,0 +1,15 @@
+.git
+.gitignore
+node_modules
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+.env
+.env.*
+!.env.example
+.weft
+.weft-server
+weft-*-*.tgz
+*.log
+coverage
+bench/artifacts

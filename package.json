@@ -13,6 +13,7 @@
     "build": "tsc -b tsconfig.json && pnpm --filter @weft/ui build",
     "typecheck": "tsc -b tsconfig.json && pnpm --filter @weft/ui typecheck",
     "clean": "tsc -b tsconfig.json --clean",
+    "package:daemon": "node node_modules/typescript/bin/tsc -b apps/daemon/tsconfig.json && node scripts/package-daemon.mjs",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
