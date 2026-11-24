@@ -354,11 +354,18 @@ export async function createServer(
     app.addHook('onClose', async () => {
       await dispatcher.stop();
     });
-  const ingest = new IngestService(db.pool, logger, conflicts, validation, notifications);
+  const hub = new StreamHub();
+  const ingest = new IngestService(
+    db.pool,
+    logger,
+    conflicts,
+    validation,
+    notifications,
+    (events) => hub.publish(events),
+  );
   const tasks = new TaskService(db.pool, logger);
   const mergeQueue = new MergeQueueService(db.pool, serverDeviceId, logger);
   const health = new HealthService(db.pool, serverDeviceId, logger);
-  const hub = new StreamHub();
   const activeStreams = new Set<() => void>();
 
   app.setErrorHandler((err, _req, reply) => {
@@ -536,11 +543,7 @@ export async function createServer(
       }
     }
     const result = await ingest.ingestBatch(parsed.data.events);
-    // Wake subscribers only after the batch (including outbox rows) commits.
-    if (result.accepted.length > 0) {
-      hub.notifyMany(Object.keys(result.streams));
-      dispatcher?.notify();
-    }
+    if (result.accepted.length > 0) dispatcher?.notify();
     return reply.code(202).send(result);
   });
 
@@ -1670,7 +1673,6 @@ export async function createServer(
   const close = async (): Promise<void> => {
     if (closed) return;
     closed = true;
-    // Stop claims and await active HTTP work before the Fastify/Postgres close.
     await dispatcher?.stop();
     // Force-end persistent SSE connections so app.close() does not hang.
     for (const cleanup of [...activeStreams]) cleanup();

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { Client, Pool } from 'pg';
 import { metrics, type Logger } from '@weft/core';
-import { safeParseEvent, isCoordinationEvent, type EventEnvelope } from '@weft/protocol';
+import { safeParseEvent, isCoordinationEvent, type EventEnvelope, type StoredEvent } from '@weft/protocol';
 import { clientExecutor, withTransaction } from './pg.js';
 import { recordAudit } from './audit.js';
 import type { ConflictProjection } from './conflicts-service.js';
@@ -128,6 +128,7 @@ export class IngestService {
     private readonly conflicts?: ConflictProjection,
     private readonly validation?: ValidationProjection,
     private readonly notifications?: NotificationProjection,
+    private readonly onCommit?: (events: StoredEvent[]) => void,
   ) {}
 
   async ingestBatch(rawEvents: unknown[]): Promise<IngestResult> {
@@ -182,6 +183,14 @@ export class IngestService {
         if (ref) result.duplicates.push(ref);
       }
       result.streams = tx.streams;
+      this.onCommit?.(
+        tx.inserted.map((ne) => ({
+          ...ne.event,
+          ts: new Date(ne.event.ts).toISOString(),
+          global_seq: ne.global_seq,
+          received_at: ne.received_at,
+        })),
+      );
       ingested.inc(tx.inserted.length);
       duplicated.inc(tx.existing.size + intraBatch.length);
     }

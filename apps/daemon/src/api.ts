@@ -381,15 +381,27 @@ export function createApiServer(daemon: Daemon, options: ApiServerOptions = {}):
     }
   });
 
-  app.get('/healthz', async () => ({
-    ok: true,
-    version: PROTOCOL_VERSION,
-    mode: daemon.config.mode,
-    device_id: daemon.identity.device_id,
-    project_id: daemon.identity.project_id,
-    events: daemon.store.countEvents(),
-    pending: daemon.pipeline.pending,
-  }));
+  app.get('/healthz', async () => {
+    const memory = process.memoryUsage();
+    return {
+      ok: true,
+      version: PROTOCOL_VERSION,
+      mode: daemon.config.mode,
+      device_id: daemon.identity.device_id,
+      project_id: daemon.identity.project_id,
+      events: daemon.store.countEvents(),
+      pending: daemon.pipeline.pending,
+      runtime: {
+        uptime_ms: Math.round(process.uptime() * 1000),
+        rss_bytes: memory.rss,
+        heap_used_bytes: memory.heapUsed,
+        heap_total_bytes: memory.heapTotal,
+        external_bytes: memory.external,
+        array_buffers_bytes: memory.arrayBuffers,
+        active_resources: process.getActiveResourcesInfo().length,
+      },
+    };
+  });
 
   app.get('/v1/bootstrap', async () => ({
     device_id: daemon.identity.device_id,
@@ -411,7 +423,14 @@ export function createApiServer(daemon: Daemon, options: ApiServerOptions = {}):
   // Direct protocol-v1 ingest (synthetic adapters, generic agents, bench).
   app.post('/v1/events', async (req, reply) => {
     const result = daemon.ingest(req.body);
-    if (!result.accepted) return reply.code(422).send({ error: 'rejected', message: result.error });
+    if (!result.accepted) {
+      return reply
+        .code(result.reason === 'backpressure' ? 503 : 422)
+        .send({
+          error: result.reason === 'backpressure' ? 'backpressure' : 'rejected',
+          message: result.error,
+        });
+    }
     return reply.code(202).send({ accepted: true, event_id: result.event_id });
   });
 

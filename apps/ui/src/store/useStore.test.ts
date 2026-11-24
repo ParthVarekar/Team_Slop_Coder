@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { filterEvents, useStore, type Filters } from './useStore.js';
 import type { WeftEvent } from '../lib/types.js';
 
@@ -22,6 +22,7 @@ function ev(type: string, extra: Partial<WeftEvent> = {}): WeftEvent {
 const EMPTY: Filters = { category: null, session: null, repo: null, task: null, search: '' };
 
 beforeEach(() => {
+  vi.useFakeTimers();
   useStore.setState({
     events: [],
     cursor: 0,
@@ -32,11 +33,30 @@ beforeEach(() => {
   });
 });
 
+afterEach(() => {
+  vi.runOnlyPendingTimers();
+  vi.useRealTimers();
+});
+
 describe('store ingest (render-count guarantees)', () => {
+  it('coalesces a burst into one bounded render batch', () => {
+    let renders = 0;
+    const unsubscribe = useStore.subscribe((state, previous) => {
+      if (state.events !== previous.events) renders++;
+    });
+    for (let i = 0; i < 100; i++) useStore.getState().ingest(ev('tool.post'));
+    expect(renders).toBe(0);
+    vi.advanceTimersByTime(50);
+    expect(renders).toBe(1);
+    expect(useStore.getState().events).toHaveLength(100);
+    unsubscribe();
+  });
+
   it('deduplicates by event_id so an event renders once', () => {
     const e = ev('tool.post');
     useStore.getState().ingest(e);
     useStore.getState().ingest(e);
+    vi.advanceTimersByTime(50);
     expect(useStore.getState().events).toHaveLength(1);
   });
 
@@ -44,6 +64,7 @@ describe('store ingest (render-count guarantees)', () => {
     useStore.getState().ingest(ev('tool.post', { rowid: 5 }));
     useStore.getState().ingest(ev('tool.post', { rowid: 3 }));
     useStore.getState().ingest(ev('tool.post', { rowid: 9 }));
+    vi.advanceTimersByTime(50);
     expect(useStore.getState().cursor).toBe(9);
   });
 
@@ -55,6 +76,7 @@ describe('store ingest (render-count guarantees)', () => {
       if (i === 0) firstId = e.event_id;
       ingest(e);
     }
+    vi.advanceTimersByTime(50);
     const events = useStore.getState().events;
     expect(events).toHaveLength(5000);
     expect(events.some((e) => e.event_id === firstId)).toBe(false);

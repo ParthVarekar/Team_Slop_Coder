@@ -53,6 +53,11 @@ export default tseslint.config(
         performance: 'readonly',
         setTimeout: 'readonly',
         document: 'readonly',
+        AbortController: 'readonly',
+        TextDecoder: 'readonly',
+        WebSocket: 'readonly',
+        PerformanceObserver: 'readonly',
+        requestAnimationFrame: 'readonly',
       },
     },
     rules: {

@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { filterEvents, useStore } from '../store/useStore.js';
 import { groupEvents } from '../lib/group.js';
 import { ActivityStream } from './ActivityStream.js';
@@ -11,14 +11,30 @@ export function StreamWorkspace() {
   const selectEvent = useStore((s) => s.selectEvent);
   const status = useStore((s) => s.status);
   const mode = useStore((s) => s.mode);
+  const [paused, setPaused] = useState(false);
+  const frozenEvents = useRef<typeof events | null>(null);
 
-  const filtered = useMemo(() => filterEvents(events, filters), [events, filters]);
+  useEffect(() => {
+    if (events.length === 0 && paused) {
+      frozenEvents.current = null;
+      setPaused(false);
+    }
+  }, [events.length, paused]);
+
+  const visibleEvents = paused ? (frozenEvents.current ?? events) : events;
+  const filtered = useMemo(() => filterEvents(visibleEvents, filters), [visibleEvents, filters]);
   const groups = useMemo(() => groupEvents(filtered), [filtered]);
+  const changePaused = (next: boolean) => {
+    frozenEvents.current = next ? events : null;
+    setPaused(next);
+  };
 
   return (
     <main className="flex min-w-0 flex-1 flex-col bg-canvas">
       <header className="flex h-11 shrink-0 items-center gap-3 border-b border-line px-4">
-        <h1 className="text-sm font-semibold text-fg">{mode === 'team' ? 'Team activity' : 'Activity'}</h1>
+        <h1 className="text-sm font-semibold text-fg">
+          {mode === 'team' ? 'Team activity' : 'Activity'}
+        </h1>
         <span className="font-mono text-[11px] text-fg-subtle">
           {filtered.length} events · {groups.length} groups
         </span>
@@ -33,7 +49,13 @@ export function StreamWorkspace() {
       </header>
       <Filters />
       <div className="min-h-0 flex-1">
-        <ActivityStream groups={groups} selectedEventId={selectedEventId} onSelect={selectEvent} />
+        <ActivityStream
+          groups={groups}
+          selectedEventId={selectedEventId}
+          onSelect={selectEvent}
+          paused={paused}
+          onPausedChange={changePaused}
+        />
       </div>
     </main>
   );

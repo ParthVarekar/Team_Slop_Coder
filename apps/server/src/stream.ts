@@ -6,6 +6,7 @@ import type { Actor, StoredEvent } from '@weft/protocol';
 const HEARTBEAT_MS = 15_000;
 const DRAIN_LIMIT = 5_000;
 const RETRY_MS = 2_000;
+const FRAME_CACHE_LIMIT = 10_000;
 
 /** Enforcement-relevant prefixes pushed on the server→daemon coordination channel. */
 const COORDINATION_PREFIXES = ['task.', 'reservation.', 'conflict.', 'merge.'];
@@ -48,13 +49,63 @@ const TEAM_COLS = `event_id, v, device_id, project_id, repo_id, session_id, prov
 const COORD_COLS = `event_id, v, device_id, project_id, repo_id, session_id,
   task_id, seq, global_seq, ts, received_at, type, actor, payload, privacy`;
 
+interface FrameCache {
+  frames: Map<number, string>;
+  latest: number;
+}
+
+export interface CachedFrames {
+  frames: string[];
+  complete: boolean;
+}
+
 /**
  * In-process wake signal (single process, no broker). The DB remains the source
  * of truth: a notify only tells subscribers to drain. Per-project listener sets
  * avoid EventEmitter max-listener limits and scope wakes to the right stream.
+ * Committed ingest batches are serialized once and shared by team subscribers;
+ * the bounded cache is only a fast path, never the durable source of truth.
  */
 export class StreamHub {
   private readonly listeners = new Map<string, Set<() => void>>();
+  private readonly cache = new Map<string, FrameCache>();
+
+  publish(events: StoredEvent[]): void {
+    const byProject = new Map<string, StoredEvent[]>();
+    for (const event of events) {
+      const list = byProject.get(event.project_id) ?? [];
+      list.push(event);
+      byProject.set(event.project_id, list);
+    }
+    for (const [projectId, list] of byProject) {
+      const entry = this.cache.get(projectId) ?? { frames: new Map<number, string>(), latest: 0 };
+      for (const event of list) {
+        entry.frames.set(event.global_seq, `id: ${event.global_seq}\ndata: ${JSON.stringify(event)}\n\n`);
+        entry.latest = Math.max(entry.latest, event.global_seq);
+      }
+      while (entry.frames.size > FRAME_CACHE_LIMIT) {
+        const oldest = entry.frames.keys().next().value;
+        if (oldest === undefined) break;
+        entry.frames.delete(oldest);
+      }
+      this.cache.set(projectId, entry);
+      this.notify(projectId);
+    }
+  }
+
+  cachedAfter(projectId: string, after: number): CachedFrames {
+    const entry = this.cache.get(projectId);
+    if (!entry) return { frames: [], complete: false };
+    const frames: string[] = [];
+    let seq = after + 1;
+    while (frames.length < DRAIN_LIMIT) {
+      const frame = entry.frames.get(seq);
+      if (frame === undefined) break;
+      frames.push(frame);
+      seq += 1;
+    }
+    return { frames, complete: seq > entry.latest };
+  }
 
   notify(projectId: string): void {
     const set = this.listeners.get(projectId);
@@ -81,6 +132,7 @@ export class StreamHub {
 
   close(): void {
     this.listeners.clear();
+    this.cache.clear();
   }
 }
 
@@ -170,15 +222,32 @@ export async function streamEvents(
     try {
       for (;;) {
         queued = false;
+        let progressed = false;
+        if (channel === 'team') {
+          const cached = hub.cachedAfter(projectId, lastSent);
+          if (cached.frames.length > 0) {
+            reply.raw.write(cached.frames.join(''));
+            lastSent += cached.frames.length;
+            sent.inc(cached.frames.length);
+            progressed = true;
+          }
+          if (cached.complete && !queued) break;
+        }
         const rows = await fetchAfter(lastSent);
         if (closed) return;
-        for (const r of rows) {
-          const event = mapStoredEvent(r);
-          reply.raw.write(`id: ${event.global_seq}\ndata: ${JSON.stringify(event)}\n\n`);
-          lastSent = event.global_seq;
-          sent.inc();
+        if (rows.length > 0) {
+          const frames = rows.map((r) => {
+            const event = mapStoredEvent(r);
+            return `id: ${event.global_seq}\ndata: ${JSON.stringify(event)}\n\n`;
+          });
+          reply.raw.write(frames.join(''));
+          lastSent = Number(rows[rows.length - 1]?.global_seq);
+          sent.inc(rows.length);
+          progressed = true;
         }
-        if (rows.length < DRAIN_LIMIT && !queued) break;
+        if (rows.length === 0) break;
+        if (rows.length < DRAIN_LIMIT && !queued && channel !== 'team') break;
+        if (!progressed) break;
       }
     } catch (err) {
       opts.logger?.debug({ err, projectId }, 'stream drain ended');

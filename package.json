@@ -26,6 +26,13 @@
     "bench:overlap": "node apps/daemon/e2e/overlap-storm.mjs",
     "bench:resolver": "node apps/daemon/e2e/resolver-perf.mjs",
     "bench:batch": "node apps/daemon/e2e/store-batch-perf.mjs",
+    "bench:load": "node apps/daemon/e2e/load-simulation.mjs",
+    "bench:fanout": "node apps/server/e2e/fanout-load.mjs",
+    "bench:catchup": "node apps/server/e2e/stream-catchup.mjs",
+    "bench:outbox": "node apps/daemon/e2e/outbox-drain.mjs",
+    "soak:daemon": "node apps/daemon/e2e/soak.mjs",
+    "bench:bundle": "node apps/ui/e2e/bundle-budget.mjs",
+    "bench:ui": "node apps/ui/e2e/flood-load.mjs",
     "bench": "pnpm --filter @weft/bench run bench",
     "check": "pnpm run build && pnpm run lint && pnpm run test"
   },

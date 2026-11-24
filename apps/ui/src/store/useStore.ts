@@ -21,6 +21,7 @@ import {
 } from '../lib/types.js';
 
 const EVENT_CAP = 5000;
+const INGEST_BATCH_MS = 50;
 const LIST_REFRESH_MS = 4000;
 
 export type ListTab = 'sessions' | 'tasks' | 'repos' | 'inbox';
@@ -81,9 +82,39 @@ export interface StoreState {
 
 const EMPTY_FILTERS: Filters = { category: null, session: null, repo: null, task: null, search: '' };
 const seen = new Set<string>();
+let pendingEvents: WeftEvent[] = [];
+let ingestTimer: ReturnType<typeof setTimeout> | null = null;
 let sse: SseClient | null = null;
 let refreshTimer: ReturnType<typeof setInterval> | null = null;
 let initialized = false;
+
+function resetPendingEvents(): void {
+  if (ingestTimer) clearTimeout(ingestTimer);
+  ingestTimer = null;
+  pendingEvents = [];
+}
+
+function flushPendingEvents(): void {
+  ingestTimer = null;
+  if (pendingEvents.length === 0) return;
+  const incoming = pendingEvents;
+  pendingEvents = [];
+  const events = [...useStore.getState().events, ...incoming];
+  let cursor = useStore.getState().cursor;
+  for (const event of incoming) {
+    const seq = event.global_seq ?? event.rowid;
+    if (seq !== undefined && seq > cursor) cursor = seq;
+  }
+  if (events.length > EVENT_CAP) {
+    const dropped = events.splice(0, events.length - EVENT_CAP);
+    for (const event of dropped) seen.delete(event.event_id);
+  }
+  if (useStore.getState().mode === 'team' && incoming.some((event) => event.type.startsWith('session.'))) {
+    useStore.setState({ events, cursor, sessions: deriveSessions(events) });
+  } else {
+    useStore.setState({ events, cursor });
+  }
+}
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -124,6 +155,7 @@ export const useStore = create<StoreState>((set, get) => ({
 
   async connectLocal() {
     sse?.stop();
+    resetPendingEvents();
     seen.clear();
     if (refreshTimer) clearInterval(refreshTimer);
     set({
@@ -146,6 +178,7 @@ export const useStore = create<StoreState>((set, get) => ({
 
   async connectTeam(connection) {
     sse?.stop();
+    resetPendingEvents();
     seen.clear();
     if (refreshTimer) clearInterval(refreshTimer);
     saveConnection(connection);
@@ -188,19 +221,9 @@ export const useStore = create<StoreState>((set, get) => ({
   ingest(event) {
     if (seen.has(event.event_id)) return;
     seen.add(event.event_id);
-    const events = [...get().events, event];
-    let cursor = get().cursor;
-    const seq = event.global_seq ?? event.rowid;
-    if (seq !== undefined && seq > cursor) cursor = seq;
-    if (events.length > EVENT_CAP) {
-      const dropped = events.splice(0, events.length - EVENT_CAP);
-      for (const d of dropped) seen.delete(d.event_id);
-    }
-    if (get().mode === 'team' && event.type.startsWith('session.')) {
-      set({ events, cursor, sessions: deriveSessions(events) });
-    } else {
-      set({ events, cursor });
-    }
+    pendingEvents.push(event);
+    if (pendingEvents.length >= EVENT_CAP) flushPendingEvents();
+    else if (!ingestTimer) ingestTimer = setTimeout(flushPendingEvents, INGEST_BATCH_MS);
   },
 
   setStatus(status) {
