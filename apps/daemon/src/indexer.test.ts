@@ -115,17 +115,26 @@ describe('Indexer git-diff invalidation', () => {
     await indexer.indexRepo(repo.repo_id);
     const bBefore = store.getFileIndexState(repo.repo_id, 'main', 'src/b.ts')?.indexed_at;
 
-    writeFileSync(join(repoPath, 'src/a.ts'), 'export const a = 1;\nexport function added(): void {}\n');
+    writeFileSync(
+      join(repoPath, 'src/a.ts'),
+      'export const a = 1;\nexport function added(): void {}\n',
+    );
     const res = await indexer.invalidate(repo.repo_id, ['src/a.ts', 'src/b.ts'], []);
     expect(res.indexed).toBe(1);
     expect(res.skipped).toBe(1);
-    expect(store.getSymbols(repo.repo_id, 'main', 'src/a.ts').map((s) => s.name)).toEqual(['a', 'added']);
+    expect(store.getSymbols(repo.repo_id, 'main', 'src/a.ts').map((s) => s.name)).toEqual([
+      'a',
+      'added',
+    ]);
     expect(store.getFileIndexState(repo.repo_id, 'main', 'src/b.ts')?.indexed_at).toBe(bBefore);
   });
 
   it('drops symbols for deleted files', async () => {
     const { store, registry, indexer } = harness();
-    const repoPath = makeRepo({ 'src/a.ts': 'export const a = 1;\n', 'src/gone.ts': 'export const g = 1;\n' });
+    const repoPath = makeRepo({
+      'src/a.ts': 'export const a = 1;\n',
+      'src/gone.ts': 'export const g = 1;\n',
+    });
     const repo = await registry.register(repoPath);
     await indexer.indexRepo(repo.repo_id);
     expect(store.countSymbols(repo.repo_id, 'main')).toBe(2);
@@ -139,7 +148,10 @@ describe('Indexer git-diff invalidation', () => {
 
   it('full sweep removes files that vanished since the last index', async () => {
     const { store, registry, indexer } = harness();
-    const repoPath = makeRepo({ 'src/a.ts': 'export const a = 1;\n', 'src/gone.ts': 'export const g = 1;\n' });
+    const repoPath = makeRepo({
+      'src/a.ts': 'export const a = 1;\n',
+      'src/gone.ts': 'export const g = 1;\n',
+    });
     const repo = await registry.register(repoPath);
     await indexer.indexRepo(repo.repo_id);
     unlinkSync(join(repoPath, 'src/gone.ts'));
@@ -167,7 +179,10 @@ describe('Indexer branch-scoped isolation', () => {
     await indexer.indexRepo(repo.repo_id, { branch: 'main' });
 
     g(repoPath, ['checkout', '-q', '-b', 'feature']);
-    writeFileSync(join(repoPath, 'src/shared.ts'), 'export const v = 2;\nexport function extra(): void {}\n');
+    writeFileSync(
+      join(repoPath, 'src/shared.ts'),
+      'export const v = 2;\nexport function extra(): void {}\n',
+    );
     g(repoPath, ['add', '-A']);
     g(repoPath, ['commit', '-qm', 'feature']);
     await indexer.indexRepo(repo.repo_id, { branch: 'feature' });
@@ -181,7 +196,9 @@ describe('Indexer branch-scoped isolation', () => {
 
     // Re-indexing feature again must not disturb main.
     await indexer.indexRepo(repo.repo_id, { branch: 'feature' });
-    expect(store.getSymbols(repo.repo_id, 'main', 'src/shared.ts').map((s) => s.name)).toEqual(['v']);
+    expect(store.getSymbols(repo.repo_id, 'main', 'src/shared.ts').map((s) => s.name)).toEqual([
+      'v',
+    ]);
   });
 
   it('reads a non-checked-out branch from the git ref (no checkout required)', async () => {
@@ -189,7 +206,10 @@ describe('Indexer branch-scoped isolation', () => {
     const repoPath = makeRepo({ 'src/shared.ts': 'export const v = 1;\n' });
     const repo = await registry.register(repoPath);
     g(repoPath, ['checkout', '-q', '-b', 'feature']);
-    writeFileSync(join(repoPath, 'src/shared.ts'), 'export const v = 1;\nexport function extra(): void {}\n');
+    writeFileSync(
+      join(repoPath, 'src/shared.ts'),
+      'export const v = 1;\nexport function extra(): void {}\n',
+    );
     g(repoPath, ['add', '-A']);
     g(repoPath, ['commit', '-qm', 'feature']);
     g(repoPath, ['checkout', '-q', 'main']);
@@ -197,7 +217,10 @@ describe('Indexer branch-scoped isolation', () => {
     // Still on main; index feature purely from the ref.
     const res = await indexer.indexRepo(repo.repo_id, { branch: 'feature', fromRef: true });
     expect(res.source).toBe('ref');
-    expect(store.getSymbols(repo.repo_id, 'feature', 'src/shared.ts').map((s) => s.name)).toEqual(['v', 'extra']);
+    expect(store.getSymbols(repo.repo_id, 'feature', 'src/shared.ts').map((s) => s.name)).toEqual([
+      'v',
+      'extra',
+    ]);
     // main was never indexed in this pass.
     expect(store.countSymbols(repo.repo_id, 'main')).toBe(0);
   });
@@ -227,7 +250,10 @@ describe('Indexer performance gates', () => {
     const changed: string[] = [];
     for (let i = 0; i < 250; i++) {
       const p = `src/f${i}.ts`;
-      writeFileSync(join(repoPath, p), `export function fn${i}(a: number): number { return a + ${i}; }\n`);
+      writeFileSync(
+        join(repoPath, p),
+        `export function fn${i}(a: number): number { return a + ${i}; }\n`,
+      );
       changed.push(p);
     }
     const inc = await indexer.invalidate(repo.repo_id, changed, []);

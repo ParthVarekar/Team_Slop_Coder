@@ -115,7 +115,10 @@ function monorepoFixture(): string {
       include: ['packages/*/src/**/*.ts'],
     }),
   );
-  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'monorepo-sim', version: '0.0.0' }));
+  writeFileSync(
+    join(dir, 'package.json'),
+    JSON.stringify({ name: 'monorepo-sim', version: '0.0.0' }),
+  );
   g(dir, ['add', '-A']);
   g(dir, ['commit', '-q', '-m', 'base']);
   return dir;
@@ -162,7 +165,9 @@ describe('M3 scale gates: 10k-file monorepo sim', () => {
     // Exit benchmark: the worker shuts down on request and a subsequent call is
     // rejected rather than silently resurrecting a stopped supervisor.
     await c.stop();
-    await expect(c.resolve(dir, { filePath: 'packages/p0/src/mod0.ts', name: 'fn0' })).rejects.toMatchObject({
+    await expect(
+      c.resolve(dir, { filePath: 'packages/p0/src/mod0.ts', name: 'fn0' }),
+    ).rejects.toMatchObject({
       code: 'crashed',
     });
   }, 300_000);
@@ -201,7 +206,8 @@ describe('M3 conflict storm: incremental L1/L2 sweep <=100ms', () => {
               ? 'export function hot(x: number, y: number): number { return x + y; }'
               : 'export function hot(x: number): number { return x + 1; }';
           }
-          if (line.includes(`function sym${i}(`)) return `export function sym${i}(x: number): number { return x + ${i + 100}; }`;
+          if (line.includes(`function sym${i}(`))
+            return `export function sym${i}(x: number): number { return x + ${i + 100}; }`;
           return line;
         })
         .join('\n');

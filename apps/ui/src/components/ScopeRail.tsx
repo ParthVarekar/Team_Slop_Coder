@@ -1,6 +1,13 @@
 import { useStore, type ListTab } from '../store/useStore.js';
 import type { ConnectionStatus } from '../lib/types.js';
-import { CommandIcon, InboxIcon, ReposIcon, SessionsIcon, SettingsIcon, TasksIcon } from './icons.js';
+import {
+  CommandIcon,
+  InboxIcon,
+  ReposIcon,
+  SessionsIcon,
+  SettingsIcon,
+  TasksIcon,
+} from './icons.js';
 
 const LOCAL_NAV: { tab: ListTab; label: string; Icon: typeof SessionsIcon }[] = [
   { tab: 'sessions', label: 'Sessions', Icon: SessionsIcon },
@@ -42,7 +49,8 @@ export function ScopeRail() {
 
   const nav = mode === 'team' ? TEAM_NAV : LOCAL_NAV;
   const inboxCount = inboxState === 'inbox' ? notifications.length : 0;
-  const statusDetail = mode === 'team' ? (connection?.serverUrl ?? '') : (bootstrap?.device_id ?? '');
+  const statusDetail =
+    mode === 'team' ? (connection?.serverUrl ?? '') : (bootstrap?.device_id ?? '');
 
   return (
     <nav className="flex w-13 shrink-0 flex-col items-center border-r border-line bg-canvas-inset py-3">
@@ -75,9 +83,7 @@ export function ScopeRail() {
                   : 'text-fg-subtle hover:bg-canvas-subtle hover:text-fg'
               }`}
             >
-              {active && (
-                <span className="absolute -left-3 h-5 w-0.5 rounded-r bg-accent" />
-              )}
+              {active && <span className="absolute -left-3 h-5 w-0.5 rounded-r bg-accent" />}
               <Icon size={18} />
               {tab === 'inbox' && inboxCount > 0 && (
                 <span className="absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-attention px-0.5 font-mono text-[8px] font-bold text-canvas-inset">

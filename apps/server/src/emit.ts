@@ -50,10 +50,22 @@ export async function appendCoordinationEvent(
         task_id, seq, global_seq, ts, received_at, type, actor, payload, privacy)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
     [
-      eventId, PROTOCOL_VERSION, input.deviceId, input.projectId,
-      input.repoId ?? null, input.sessionId ?? null, null,
-      input.taskId ?? null, null, globalSeq, now, now,
-      input.type, JSON.stringify(input.actor), JSON.stringify(input.payload), privacy,
+      eventId,
+      PROTOCOL_VERSION,
+      input.deviceId,
+      input.projectId,
+      input.repoId ?? null,
+      input.sessionId ?? null,
+      null,
+      input.taskId ?? null,
+      null,
+      globalSeq,
+      now,
+      now,
+      input.type,
+      JSON.stringify(input.actor),
+      JSON.stringify(input.payload),
+      privacy,
     ],
   );
 
@@ -64,9 +76,21 @@ export async function appendCoordinationEvent(
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
      ON CONFLICT (event_id) DO NOTHING`,
     [
-      eventId, PROTOCOL_VERSION, input.deviceId, input.projectId,
-      input.repoId ?? null, input.sessionId ?? null, input.taskId ?? null, null,
-      globalSeq, now, now, input.type, JSON.stringify(input.actor), JSON.stringify(input.payload), privacy,
+      eventId,
+      PROTOCOL_VERSION,
+      input.deviceId,
+      input.projectId,
+      input.repoId ?? null,
+      input.sessionId ?? null,
+      input.taskId ?? null,
+      null,
+      globalSeq,
+      now,
+      now,
+      input.type,
+      JSON.stringify(input.actor),
+      JSON.stringify(input.payload),
+      privacy,
     ],
   );
 

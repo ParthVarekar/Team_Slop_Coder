@@ -22,11 +22,7 @@ export function StreamGroupRow({
   if (single && first) {
     return (
       <div className="border-l-2" style={{ borderColor: color }}>
-        <EventRow
-          event={first}
-          selected={selectedEventId === first.event_id}
-          onSelect={onSelect}
-        />
+        <EventRow event={first} selected={selectedEventId === first.event_id} onSelect={onSelect} />
       </div>
     );
   }

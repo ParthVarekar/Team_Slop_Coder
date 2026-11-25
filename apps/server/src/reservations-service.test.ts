@@ -87,7 +87,9 @@ describe('ReservationService leases', () => {
     expect(res.reservation.task_id).toBe(task);
     expect(res.reservation.expires_at).not.toBeNull();
     expect(res.reservation.grace_until).not.toBeNull();
-    expect(Date.parse(res.reservation.grace_until!)).toBeGreaterThan(Date.parse(res.reservation.expires_at!));
+    expect(Date.parse(res.reservation.grace_until!)).toBeGreaterThan(
+      Date.parse(res.reservation.expires_at!),
+    );
 
     expect(await eventCount('reservation.acquired', repo)).toBe(1);
     expect(await auditCount('reservation.acquired', `reservation:${res.reservation.id}`)).toBe(1);
@@ -129,14 +131,22 @@ describe('ReservationService leases', () => {
     );
     expect(held.status).toBe('acquired');
 
-    const immediate = await reservations.acquire(world.projectA, input(rival, repo, glob, { mode: 'hard' }), origin);
+    const immediate = await reservations.acquire(
+      world.projectA,
+      input(rival, repo, glob, { mode: 'hard' }),
+      origin,
+    );
     expect(immediate.status).toBe('denied');
     expect(immediate.reason).toBe('held');
     expect(immediate.reservation.id).toBe(held.reservation.id);
 
     // Past expires_at but inside grace: the lock must STILL block the rival.
     await sleep(200);
-    const inGrace = await reservations.acquire(world.projectA, input(rival, repo, glob, { mode: 'hard' }), origin);
+    const inGrace = await reservations.acquire(
+      world.projectA,
+      input(rival, repo, glob, { mode: 'hard' }),
+      origin,
+    );
     expect(inGrace.status).toBe('denied');
     const still = await reservations.get(world.projectA, held.reservation.id);
     expect(still?.state).toBe('active');
@@ -161,7 +171,11 @@ describe('ReservationService leases', () => {
       reservations.renew(world.projectA, held.reservation.id, holder, origin, 60_000),
     ).rejects.toMatchObject({ code: 'invalid_transition' });
 
-    const reclaimed = await reservations.acquire(world.projectA, input(rival, repo, glob, { mode: 'hard' }), origin);
+    const reclaimed = await reservations.acquire(
+      world.projectA,
+      input(rival, repo, glob, { mode: 'hard' }),
+      origin,
+    );
     expect(reclaimed.status).toBe('acquired');
     expect(reclaimed.reservation.id).not.toBe(held.reservation.id);
     const old = await reservations.get(world.projectA, held.reservation.id);
@@ -182,13 +196,25 @@ describe('ReservationService leases', () => {
       origin,
     );
     await sleep(200); // inside grace (expires 100, grace 500)
-    const renewed = await reservations.renew(world.projectA, held.reservation.id, holder, origin, 100);
+    const renewed = await reservations.renew(
+      world.projectA,
+      held.reservation.id,
+      holder,
+      origin,
+      100,
+    );
     expect(renewed.state).toBe('active');
     expect(renewed.lease_epoch).toBe(2);
-    expect(Date.parse(renewed.expires_at!)).toBeGreaterThan(Date.parse(held.reservation.expires_at!));
+    expect(Date.parse(renewed.expires_at!)).toBeGreaterThan(
+      Date.parse(held.reservation.expires_at!),
+    );
     expect(await eventCount('reservation.renewed', repo)).toBe(1);
 
-    const rivalRes = await reservations.acquire(world.projectA, input(rival, repo, glob, { mode: 'hard' }), origin);
+    const rivalRes = await reservations.acquire(
+      world.projectA,
+      input(rival, repo, glob, { mode: 'hard' }),
+      origin,
+    );
     expect(rivalRes.status).toBe('denied');
   });
 
@@ -197,7 +223,13 @@ describe('ReservationService leases', () => {
     const glob = 'src/race.ts';
     const tasks = Array.from({ length: 8 }, () => makeId('task'));
     const results = await Promise.all(
-      tasks.map((t) => reservations.acquire(world.projectA, input(t, repo, glob, { mode: 'hard', ttl_ms: 60_000 }), origin)),
+      tasks.map((t) =>
+        reservations.acquire(
+          world.projectA,
+          input(t, repo, glob, { mode: 'hard', ttl_ms: 60_000 }),
+          origin,
+        ),
+      ),
     );
     const winners = results.filter((r) => r.status === 'acquired');
     const losers = results.filter((r) => r.status === 'denied');
@@ -213,20 +245,34 @@ describe('ReservationService leases', () => {
     const holder = makeId('task');
     const rival = makeId('task');
     const glob = 'src/release.ts';
-    const held = await reservations.acquire(world.projectA, input(holder, repo, glob, { ttl_ms: 60_000 }), origin);
+    const held = await reservations.acquire(
+      world.projectA,
+      input(holder, repo, glob, { ttl_ms: 60_000 }),
+      origin,
+    );
 
     await expect(
       reservations.release(world.projectA, held.reservation.id, rival, origin),
     ).rejects.toMatchObject({ code: 'forbidden' });
 
-    const released = await reservations.release(world.projectA, held.reservation.id, holder, origin, 'done');
+    const released = await reservations.release(
+      world.projectA,
+      held.reservation.id,
+      holder,
+      origin,
+      'done',
+    );
     expect(released.state).toBe('released');
     expect(released.released_reason).toBe('done');
     const again = await reservations.release(world.projectA, held.reservation.id, holder, origin);
     expect(again.state).toBe('released');
     expect(await eventCount('reservation.released', repo)).toBe(1); // idempotent: no second event
 
-    const reacquired = await reservations.acquire(world.projectA, input(rival, repo, glob, { ttl_ms: 60_000 }), origin);
+    const reacquired = await reservations.acquire(
+      world.projectA,
+      input(rival, repo, glob, { ttl_ms: 60_000 }),
+      origin,
+    );
     expect(reacquired.status).toBe('acquired');
     expect(reacquired.reservation.id).not.toBe(held.reservation.id);
   });
@@ -274,8 +320,16 @@ describe('ReservationService leases', () => {
     const glob = 'src/shared.ts';
     const taskA = makeId('task');
     const taskB = makeId('task');
-    const a = await reservations.acquire(world.projectA, input(taskA, repo, glob, { mode: 'hard', ttl_ms: 60_000 }), origin);
-    const b = await reservations.acquire(world.projectB, input(taskB, repo, glob, { mode: 'hard', ttl_ms: 60_000 }), origin);
+    const a = await reservations.acquire(
+      world.projectA,
+      input(taskA, repo, glob, { mode: 'hard', ttl_ms: 60_000 }),
+      origin,
+    );
+    const b = await reservations.acquire(
+      world.projectB,
+      input(taskB, repo, glob, { mode: 'hard', ttl_ms: 60_000 }),
+      origin,
+    );
     expect(a.status).toBe('acquired');
     expect(b.status).toBe('acquired');
     expect(a.reservation.id).not.toBe(b.reservation.id);
@@ -287,9 +341,17 @@ describe('ReservationService leases', () => {
     const repo = makeId('repo');
     const t1 = makeId('task');
     const t2 = makeId('task');
-    const soft = await reservations.acquire(world.projectA, input(t1, repo, 'src/soft.ts', { ttl_ms: 60_000 }), origin);
+    const soft = await reservations.acquire(
+      world.projectA,
+      input(t1, repo, 'src/soft.ts', { ttl_ms: 60_000 }),
+      origin,
+    );
     expect(soft.reservation.mode).toBe('soft');
-    const second = await reservations.acquire(world.projectA, input(t2, repo, 'src/other.ts', { ttl_ms: 60_000 }), origin);
+    const second = await reservations.acquire(
+      world.projectA,
+      input(t2, repo, 'src/other.ts', { ttl_ms: 60_000 }),
+      origin,
+    );
     await reservations.release(world.projectA, soft.reservation.id, t1, origin);
 
     const active = await reservations.list(world.projectA, { repoId: repo, state: 'active' });
@@ -302,7 +364,11 @@ describe('ReservationService leases', () => {
 
   it('rejects an invalid acquire body', async () => {
     await expect(
-      reservations.acquire(world.projectA, { repo_id: '', task_id: 't', path_glob: 'x' } as AcquireReservationInput, origin),
+      reservations.acquire(
+        world.projectA,
+        { repo_id: '', task_id: 't', path_glob: 'x' } as AcquireReservationInput,
+        origin,
+      ),
     ).rejects.toMatchObject({ code: 'validation' });
   });
 });

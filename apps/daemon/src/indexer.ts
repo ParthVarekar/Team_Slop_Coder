@@ -18,7 +18,10 @@ const fileLatency = metrics.histogram(
   'weft_index_file_ms',
   'Per-file symbol extraction + persist latency (ms)',
 );
-const symbolsIndexed = metrics.counter('weft_symbols_indexed_total', 'Symbols written to the index');
+const symbolsIndexed = metrics.counter(
+  'weft_symbols_indexed_total',
+  'Symbols written to the index',
+);
 const filesIndexed = metrics.counter('weft_index_files_total', 'Files (re)indexed');
 
 const SOURCE_RE = /\.(ts|tsx|js|jsx|mjs|cjs)$/;

@@ -21,7 +21,10 @@ export const ROLE_SCOPES: Record<Role, readonly Scope[]> = {
   admin: ['read', 'ingest', 'mutate', 'admin'],
 };
 
-const authDenied = metrics.counter('weft_server_auth_denied_total', 'Authentication/authorization denials');
+const authDenied = metrics.counter(
+  'weft_server_auth_denied_total',
+  'Authentication/authorization denials',
+);
 const tokensIssued = metrics.counter('weft_server_tokens_issued_total', 'API tokens issued');
 const tokensRevoked = metrics.counter('weft_server_tokens_revoked_total', 'API tokens revoked');
 
@@ -47,8 +50,14 @@ function sha256(value: string): string {
 }
 
 function parseScope(raw: unknown): Scope[] {
-  const arr = Array.isArray(raw) ? raw : typeof raw === 'string' ? (JSON.parse(raw) as unknown[]) : [];
-  return arr.filter((s): s is Scope => typeof s === 'string' && (SCOPES as readonly string[]).includes(s));
+  const arr = Array.isArray(raw)
+    ? raw
+    : typeof raw === 'string'
+      ? (JSON.parse(raw) as unknown[])
+      : [];
+  return arr.filter(
+    (s): s is Scope => typeof s === 'string' && (SCOPES as readonly string[]).includes(s),
+  );
 }
 
 function capScope(stored: Scope[], role: Role): Scope[] {
@@ -249,7 +258,12 @@ export class AuthService {
   }
 
   /** Append an auth.denied audit row (only when a project context is known). */
-  async recordDenial(projectId: string, reason: string, actor: Actor, tokenId?: string): Promise<void> {
+  async recordDenial(
+    projectId: string,
+    reason: string,
+    actor: Actor,
+    tokenId?: string,
+  ): Promise<void> {
     authDenied.inc();
     await recordAudit(poolExecutor(this.pool), {
       projectId,
@@ -292,7 +306,9 @@ export class AuthService {
       this.assertNoEscalation(input.role, role);
     }
     if (deviceId) {
-      const { rows } = await this.pool.query('SELECT user_id FROM devices WHERE id = $1', [deviceId]);
+      const { rows } = await this.pool.query('SELECT user_id FROM devices WHERE id = $1', [
+        deviceId,
+      ]);
       if (rows.length === 0) throw new AuthError(404, 'device_not_found');
       const owner = str(rows[0].user_id);
       if (owner) {
@@ -307,13 +323,20 @@ export class AuthService {
     const raw = generateToken();
     const scope = [...ROLE_SCOPES[input.role]];
     const expiresAt =
-      input.expiresInDays != null
-        ? new Date(Date.now() + input.expiresInDays * 86_400_000)
-        : null;
+      input.expiresInDays != null ? new Date(Date.now() + input.expiresInDays * 86_400_000) : null;
     await this.pool.query(
       `INSERT INTO api_tokens (id, user_id, device_id, project_id, scope, hash, expires_at, name)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-      [id, userId, deviceId, input.projectId, JSON.stringify(scope), hashToken(raw), expiresAt, input.name ?? null],
+      [
+        id,
+        userId,
+        deviceId,
+        input.projectId,
+        JSON.stringify(scope),
+        hashToken(raw),
+        expiresAt,
+        input.name ?? null,
+      ],
     );
     await recordAudit(poolExecutor(this.pool), {
       projectId: input.projectId,
@@ -348,8 +371,7 @@ export class AuthService {
     const row = rows[0];
     if (!row) throw new AuthError(404, 'token_not_found');
     const ownerProject = String(row.project_id);
-    if (projectId != null && ownerProject !== projectId)
-      throw new AuthError(403, 'cross_project');
+    if (projectId != null && ownerProject !== projectId) throw new AuthError(403, 'cross_project');
     if (row.revoked_at != null) return { alreadyRevoked: true };
     await this.pool.query('UPDATE api_tokens SET revoked_at = now() WHERE id = $1', [tokenId]);
     await recordAudit(poolExecutor(this.pool), {

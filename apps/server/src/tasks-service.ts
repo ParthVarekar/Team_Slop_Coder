@@ -25,8 +25,14 @@ export const TaskPrioritySchema = z.enum(['P0', 'P1', 'P2', 'P3']);
 const created = metrics.counter('weft_server_tasks_created_total', 'Tasks created');
 const claimedOk = metrics.counter('weft_server_tasks_claimed_total', 'Claims granted');
 const claimRejected = metrics.counter('weft_server_tasks_claim_rejected_total', 'Claims rejected');
-const editConflicts = metrics.counter('weft_server_tasks_edit_conflicts_total', 'Field merge conflicts');
-const claimsRecorded = metrics.counter('weft_server_tasks_completion_claims_total', 'Completion claims recorded');
+const editConflicts = metrics.counter(
+  'weft_server_tasks_edit_conflicts_total',
+  'Field merge conflicts',
+);
+const claimsRecorded = metrics.counter(
+  'weft_server_tasks_completion_claims_total',
+  'Completion claims recorded',
+);
 
 // ---------------------------------------------------------------------------
 // Snapshot helpers (the fold reducer + types live in @weft/protocol)
@@ -78,7 +84,11 @@ const SNAPSHOT_COLS = `id, project_id, repo_id, number, title, description, acce
   validation_requirements, priority, state, expected_modules, expected_files, branch,
   workspace_id, version, created_by, parent_task_id, edit_conflict`;
 
-async function lockSnapshot(client: Client, taskId: string, projectId: string): Promise<TaskSnapshot> {
+async function lockSnapshot(
+  client: Client,
+  taskId: string,
+  projectId: string,
+): Promise<TaskSnapshot> {
   const res = await client.query(
     `SELECT ${SNAPSHOT_COLS} FROM tasks WHERE id = $1 AND project_id = $2 FOR UPDATE`,
     [taskId, projectId],
@@ -96,10 +106,23 @@ async function insertSnapshot(client: Client, s: TaskSnapshot): Promise<void> {
         branch, workspace_id, version, created_by, parent_task_id, edit_conflict)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
     [
-      s.id, s.project_id, s.repo_id, s.number, s.title, s.description,
-      JSON.stringify(s.acceptance_criteria), JSON.stringify(s.validation_requirements),
-      s.priority, s.state, JSON.stringify(s.expected_modules), JSON.stringify(s.expected_files),
-      s.branch, s.workspace_id, s.version, s.created_by, s.parent_task_id,
+      s.id,
+      s.project_id,
+      s.repo_id,
+      s.number,
+      s.title,
+      s.description,
+      JSON.stringify(s.acceptance_criteria),
+      JSON.stringify(s.validation_requirements),
+      s.priority,
+      s.state,
+      JSON.stringify(s.expected_modules),
+      JSON.stringify(s.expected_files),
+      s.branch,
+      s.workspace_id,
+      s.version,
+      s.created_by,
+      s.parent_task_id,
       s.edit_conflict ? JSON.stringify(s.edit_conflict) : null,
     ],
   );
@@ -113,20 +136,27 @@ async function writeSnapshot(client: Client, s: TaskSnapshot): Promise<void> {
         parent_task_id=$15, edit_conflict=$16, updated_at=now()
       WHERE id=$1`,
     [
-      s.id, s.repo_id, s.title, s.description, JSON.stringify(s.acceptance_criteria),
-      JSON.stringify(s.validation_requirements), s.priority, s.state,
-      JSON.stringify(s.expected_modules), JSON.stringify(s.expected_files), s.branch,
-      s.workspace_id, s.version, s.created_by, s.parent_task_id,
+      s.id,
+      s.repo_id,
+      s.title,
+      s.description,
+      JSON.stringify(s.acceptance_criteria),
+      JSON.stringify(s.validation_requirements),
+      s.priority,
+      s.state,
+      JSON.stringify(s.expected_modules),
+      JSON.stringify(s.expected_files),
+      s.branch,
+      s.workspace_id,
+      s.version,
+      s.created_by,
+      s.parent_task_id,
       s.edit_conflict ? JSON.stringify(s.edit_conflict) : null,
     ],
   );
 }
 
-async function appendTaskEvent(
-  client: Client,
-  taskId: string,
-  event: TaskEvent,
-): Promise<void> {
+async function appendTaskEvent(client: Client, taskId: string, event: TaskEvent): Promise<void> {
   await client.query(
     `INSERT INTO task_events (task_id, version, type, actor, payload) VALUES ($1,$2,$3,$4,$5)`,
     [taskId, event.version, event.type, JSON.stringify(event.actor), JSON.stringify(event.payload)],
@@ -137,12 +167,7 @@ async function appendTaskEvent(
 // Errors + inputs
 // ---------------------------------------------------------------------------
 export type TaskErrorCode =
-  | 'not_found'
-  | 'conflict'
-  | 'invalid_transition'
-  | 'validation'
-  | 'cycle'
-  | 'evidence_required';
+  'not_found' | 'conflict' | 'invalid_transition' | 'validation' | 'cycle' | 'evidence_required';
 
 export class TaskError extends Error {
   constructor(
@@ -208,12 +233,17 @@ const FIELD_TO_COLUMN: Record<keyof TaskFields, EditableColumn> = {
 
 function parse<S extends z.ZodTypeAny>(schema: S, value: unknown): z.output<S> {
   const result = schema.safeParse(value);
-  if (!result.success) throw new TaskError('validation', result.error.issues.map((i) => i.message).join('; '));
+  if (!result.success)
+    throw new TaskError('validation', result.error.issues.map((i) => i.message).join('; '));
   return result.data;
 }
 
 function columnValue(column: EditableColumn, value: unknown): unknown {
-  if (column === 'acceptance_criteria' || column === 'expected_modules' || column === 'expected_files') {
+  if (
+    column === 'acceptance_criteria' ||
+    column === 'expected_modules' ||
+    column === 'expected_files'
+  ) {
     return value == null ? [] : value;
   }
   if (column === 'validation_requirements') return value == null ? {} : value;
@@ -257,10 +287,13 @@ export class TaskService {
     const parsed = parse(CreateTaskSchema, input);
     const snapshot = await withTransaction(this.pool, async (client) => {
       const proj = await client.query('SELECT 1 FROM projects WHERE id = $1', [projectId]);
-      if (proj.rows.length === 0) throw new TaskError('not_found', `project ${projectId} not found`);
+      if (proj.rows.length === 0)
+        throw new TaskError('not_found', `project ${projectId} not found`);
       // Serialize per-project numbering so concurrent creates never collide on
       // the UNIQUE (project_id, number) constraint.
-      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`${projectId}:task-number`]);
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+        `${projectId}:task-number`,
+      ]);
       const numRes = await client.query(
         'SELECT COALESCE(MAX(number), 0) + 1 AS n FROM tasks WHERE project_id = $1',
         [projectId],
@@ -293,13 +326,27 @@ export class TaskService {
         snapshot_digest: digest(s),
         snapshot: s,
       };
-      await appendTaskEvent(client, s.id, { type: 'task.created', version: 0, actor: origin.actor, payload });
+      await appendTaskEvent(client, s.id, {
+        type: 'task.created',
+        version: 0,
+        actor: origin.actor,
+        payload,
+      });
       await appendCoordinationEvent(client, {
-        projectId, deviceId: origin.deviceId, type: 'task.created', actor: origin.actor,
-        payload, taskId: s.id, ...(s.repo_id ? { repoId: s.repo_id } : {}),
+        projectId,
+        deviceId: origin.deviceId,
+        type: 'task.created',
+        actor: origin.actor,
+        payload,
+        taskId: s.id,
+        ...(s.repo_id ? { repoId: s.repo_id } : {}),
       });
       await recordAudit(clientExecutor(client), {
-        projectId, actor: origin.actor, action: 'task.created', subject: `task:${s.id}`, afterHash: digest(s),
+        projectId,
+        actor: origin.actor,
+        action: 'task.created',
+        subject: `task:${s.id}`,
+        afterHash: digest(s),
       });
       return s;
     });
@@ -350,7 +397,10 @@ export class TaskService {
     return withTransaction(this.pool, async (client) => {
       const current = await lockSnapshot(client, taskId, projectId);
       if (baseVersion > current.version)
-        throw new TaskError('conflict', `base version ${baseVersion} is ahead of ${current.version}`);
+        throw new TaskError(
+          'conflict',
+          `base version ${baseVersion} is ahead of ${current.version}`,
+        );
       if (entries.length === 0) return current;
 
       const changed = await client.query(
@@ -392,20 +442,42 @@ export class TaskService {
         values,
         edit_conflict: editConflict,
       };
-      const next = applyTaskEvent(current, { type: 'task.updated', version, actor: origin.actor, payload }) as TaskSnapshot;
+      const next = applyTaskEvent(current, {
+        type: 'task.updated',
+        version,
+        actor: origin.actor,
+        payload,
+      }) as TaskSnapshot;
       payload.snapshot_digest = digest(next);
       await writeSnapshot(client, next);
-      await appendTaskEvent(client, taskId, { type: 'task.updated', version, actor: origin.actor, payload });
+      await appendTaskEvent(client, taskId, {
+        type: 'task.updated',
+        version,
+        actor: origin.actor,
+        payload,
+      });
       await appendCoordinationEvent(client, {
-        projectId, deviceId: origin.deviceId, type: 'task.updated', actor: origin.actor,
-        payload, taskId, ...(next.repo_id ? { repoId: next.repo_id } : {}),
+        projectId,
+        deviceId: origin.deviceId,
+        type: 'task.updated',
+        actor: origin.actor,
+        payload,
+        taskId,
+        ...(next.repo_id ? { repoId: next.repo_id } : {}),
       });
       await recordAudit(clientExecutor(client), {
-        projectId, actor: origin.actor, action: 'task.updated', subject: `task:${taskId}`, afterHash: digest(next),
+        projectId,
+        actor: origin.actor,
+        action: 'task.updated',
+        subject: `task:${taskId}`,
+        afterHash: digest(next),
       });
       if (Object.keys(conflicts).length > 0) {
         editConflicts.inc(Object.keys(conflicts).length);
-        this.logger?.warn({ taskId, fields: Object.keys(conflicts) }, 'task edit conflict recorded');
+        this.logger?.warn(
+          { taskId, fields: Object.keys(conflicts) },
+          'task edit conflict recorded',
+        );
       }
       return next;
     });
@@ -433,15 +505,34 @@ export class TaskService {
         );
       const version = current.version + 1;
       const payload = { from: current.state, to: target, version, ...(reason ? { reason } : {}) };
-      const next = applyTaskEvent(current, { type: 'task.state_changed', version, actor: origin.actor, payload }) as TaskSnapshot;
+      const next = applyTaskEvent(current, {
+        type: 'task.state_changed',
+        version,
+        actor: origin.actor,
+        payload,
+      }) as TaskSnapshot;
       await writeSnapshot(client, next);
-      await appendTaskEvent(client, taskId, { type: 'task.state_changed', version, actor: origin.actor, payload });
+      await appendTaskEvent(client, taskId, {
+        type: 'task.state_changed',
+        version,
+        actor: origin.actor,
+        payload,
+      });
       await appendCoordinationEvent(client, {
-        projectId, deviceId: origin.deviceId, type: 'task.state_changed', actor: origin.actor,
-        payload, taskId, ...(next.repo_id ? { repoId: next.repo_id } : {}),
+        projectId,
+        deviceId: origin.deviceId,
+        type: 'task.state_changed',
+        actor: origin.actor,
+        payload,
+        taskId,
+        ...(next.repo_id ? { repoId: next.repo_id } : {}),
       });
       await recordAudit(clientExecutor(client), {
-        projectId, actor: origin.actor, action: 'task.state_changed', subject: `task:${taskId}`, afterHash: digest(next),
+        projectId,
+        actor: origin.actor,
+        action: 'task.state_changed',
+        subject: `task:${taskId}`,
+        afterHash: digest(next),
       });
       if (target === 'completed') await this.promoteDependents(client, projectId, taskId, origin);
       return next;
@@ -473,20 +564,35 @@ export class TaskService {
       );
       const payload = { claim_text: text, evidence_state: 'unverified' };
       await appendTaskEvent(client, taskId, {
-        type: 'task.completion_claimed', version: current.version, actor: origin.actor, payload,
+        type: 'task.completion_claimed',
+        version: current.version,
+        actor: origin.actor,
+        payload,
       });
       await appendCoordinationEvent(client, {
-        projectId, deviceId: origin.deviceId, type: 'task.completion_claimed', actor: origin.actor,
-        payload, taskId, ...(current.repo_id ? { repoId: current.repo_id } : {}),
+        projectId,
+        deviceId: origin.deviceId,
+        type: 'task.completion_claimed',
+        actor: origin.actor,
+        payload,
+        taskId,
+        ...(current.repo_id ? { repoId: current.repo_id } : {}),
         ...(sessionId ? { sessionId } : {}),
       });
       await recordAudit(clientExecutor(client), {
-        projectId, actor: origin.actor, action: 'task.completion_claimed', subject: `task:${taskId}`,
+        projectId,
+        actor: origin.actor,
+        action: 'task.completion_claimed',
+        subject: `task:${taskId}`,
       });
       claimsRecorded.inc();
       return {
-        id, task_id: taskId, session_id: sessionId ?? null, claimed_at: claimedAt,
-        claim_text: text, evidence_state: 'unverified',
+        id,
+        task_id: taskId,
+        session_id: sessionId ?? null,
+        claimed_at: claimedAt,
+        claim_text: text,
+        evidence_state: 'unverified',
       };
     });
   }
@@ -514,7 +620,12 @@ export class TaskService {
    * and is deterministically rejected with the winner recorded. Offline claims
    * pass provisional=true so a losing daemon can discard its quarantined worktree.
    */
-  async claim(taskId: string, projectId: string, input: ClaimInput, origin: Origin): Promise<ClaimResult> {
+  async claim(
+    taskId: string,
+    projectId: string,
+    input: ClaimInput,
+    origin: Origin,
+  ): Promise<ClaimResult> {
     const parsed = parse(ClaimSchema, input);
     const claimant = parsed.claimant ?? origin.actor;
     const deviceId = parsed.deviceId ?? origin.deviceId;
@@ -530,29 +641,69 @@ export class TaskService {
           device_id: deviceId,
           provisional: parsed.provisional,
         };
-        await appendTaskEvent(client, taskId, { type: 'task.claim_rejected', version: current.version, actor: claimant, payload });
+        await appendTaskEvent(client, taskId, {
+          type: 'task.claim_rejected',
+          version: current.version,
+          actor: claimant,
+          payload,
+        });
         await appendCoordinationEvent(client, {
-          projectId, deviceId, type: 'task.claim_rejected', actor: claimant, payload, taskId,
+          projectId,
+          deviceId,
+          type: 'task.claim_rejected',
+          actor: claimant,
+          payload,
+          taskId,
         });
         claimRejected.inc();
-        return { ok: false, reason: payload.reason, version: current.version, winner_claimant: winner };
+        return {
+          ok: false,
+          reason: payload.reason,
+          version: current.version,
+          winner_claimant: winner,
+        };
       }
       const version = current.version + 1;
       const payload = { version, claimant, provisional: parsed.provisional, device_id: deviceId };
-      const next = applyTaskEvent(current, { type: 'task.claimed', version, actor: claimant, payload }) as TaskSnapshot;
+      const next = applyTaskEvent(current, {
+        type: 'task.claimed',
+        version,
+        actor: claimant,
+        payload,
+      }) as TaskSnapshot;
       await writeSnapshot(client, next);
-      await client.query(`DELETE FROM task_assignees WHERE task_id = $1 AND role = 'primary'`, [taskId]);
+      await client.query(`DELETE FROM task_assignees WHERE task_id = $1 AND role = 'primary'`, [
+        taskId,
+      ]);
       await client.query(
         `INSERT INTO task_assignees (task_id, user_id, agent_provider, role) VALUES ($1,$2,$3,'primary')`,
-        [taskId, isSystemActor(claimant) ? null : claimant.user_id, isSystemActor(claimant) ? null : claimant.agent?.provider ?? null],
+        [
+          taskId,
+          isSystemActor(claimant) ? null : claimant.user_id,
+          isSystemActor(claimant) ? null : (claimant.agent?.provider ?? null),
+        ],
       );
-      await appendTaskEvent(client, taskId, { type: 'task.claimed', version, actor: claimant, payload });
+      await appendTaskEvent(client, taskId, {
+        type: 'task.claimed',
+        version,
+        actor: claimant,
+        payload,
+      });
       await appendCoordinationEvent(client, {
-        projectId, deviceId, type: 'task.claimed', actor: claimant, payload, taskId,
+        projectId,
+        deviceId,
+        type: 'task.claimed',
+        actor: claimant,
+        payload,
+        taskId,
         ...(next.repo_id ? { repoId: next.repo_id } : {}),
       });
       await recordAudit(clientExecutor(client), {
-        projectId, actor: claimant, action: 'task.claimed', subject: `task:${taskId}`, afterHash: digest(next),
+        projectId,
+        actor: claimant,
+        action: 'task.claimed',
+        subject: `task:${taskId}`,
+        afterHash: digest(next),
       });
       claimedOk.inc();
       return { ok: true, snapshot: next, provisional: parsed.provisional };
@@ -574,15 +725,36 @@ export class TaskService {
         throw new TaskError('invalid_transition', `cannot release a ${current.state} task`);
       const version = current.version + 1;
       const payload = { version, to: 'ready', device_id: origin.deviceId };
-      const next = applyTaskEvent(current, { type: 'task.released', version, actor: origin.actor, payload }) as TaskSnapshot;
+      const next = applyTaskEvent(current, {
+        type: 'task.released',
+        version,
+        actor: origin.actor,
+        payload,
+      }) as TaskSnapshot;
       await writeSnapshot(client, next);
-      await client.query(`DELETE FROM task_assignees WHERE task_id = $1 AND role = 'primary'`, [taskId]);
-      await appendTaskEvent(client, taskId, { type: 'task.released', version, actor: origin.actor, payload });
+      await client.query(`DELETE FROM task_assignees WHERE task_id = $1 AND role = 'primary'`, [
+        taskId,
+      ]);
+      await appendTaskEvent(client, taskId, {
+        type: 'task.released',
+        version,
+        actor: origin.actor,
+        payload,
+      });
       await appendCoordinationEvent(client, {
-        projectId, deviceId: origin.deviceId, type: 'task.released', actor: origin.actor, payload, taskId,
+        projectId,
+        deviceId: origin.deviceId,
+        type: 'task.released',
+        actor: origin.actor,
+        payload,
+        taskId,
       });
       await recordAudit(clientExecutor(client), {
-        projectId, actor: origin.actor, action: 'task.released', subject: `task:${taskId}`, afterHash: digest(next),
+        projectId,
+        actor: origin.actor,
+        action: 'task.released',
+        subject: `task:${taskId}`,
+        afterHash: digest(next),
       });
       return next;
     });
@@ -609,16 +781,42 @@ export class TaskService {
         appliedColumns.push(column);
       }
       const version = current.version + 1;
-      const payload = { version, changed_fields: appliedColumns, snapshot_digest: '', values, edit_conflict: null, resolved_conflict: true };
-      const next = applyTaskEvent(current, { type: 'task.updated', version, actor: origin.actor, payload }) as TaskSnapshot;
+      const payload = {
+        version,
+        changed_fields: appliedColumns,
+        snapshot_digest: '',
+        values,
+        edit_conflict: null,
+        resolved_conflict: true,
+      };
+      const next = applyTaskEvent(current, {
+        type: 'task.updated',
+        version,
+        actor: origin.actor,
+        payload,
+      }) as TaskSnapshot;
       payload.snapshot_digest = digest(next);
       await writeSnapshot(client, next);
-      await appendTaskEvent(client, taskId, { type: 'task.updated', version, actor: origin.actor, payload });
+      await appendTaskEvent(client, taskId, {
+        type: 'task.updated',
+        version,
+        actor: origin.actor,
+        payload,
+      });
       await appendCoordinationEvent(client, {
-        projectId, deviceId: origin.deviceId, type: 'task.updated', actor: origin.actor, payload, taskId,
+        projectId,
+        deviceId: origin.deviceId,
+        type: 'task.updated',
+        actor: origin.actor,
+        payload,
+        taskId,
       });
       await recordAudit(clientExecutor(client), {
-        projectId, actor: origin.actor, action: 'task.conflict_resolved', subject: `task:${taskId}`, afterHash: digest(next),
+        projectId,
+        actor: origin.actor,
+        action: 'task.conflict_resolved',
+        subject: `task:${taskId}`,
+        afterHash: digest(next),
       });
       return next;
     });
@@ -627,10 +825,17 @@ export class TaskService {
   // -------------------------------------------------------------------------
   // Dependencies (DAG) + READY computation
   // -------------------------------------------------------------------------
-  async addDependency(taskId: string, projectId: string, dependsOn: string, origin: Origin): Promise<void> {
+  async addDependency(
+    taskId: string,
+    projectId: string,
+    dependsOn: string,
+    origin: Origin,
+  ): Promise<void> {
     if (taskId === dependsOn) throw new TaskError('cycle', 'a task cannot depend on itself');
     await withTransaction(this.pool, async (client) => {
-      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`${projectId}:task-deps`]);
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+        `${projectId}:task-deps`,
+      ]);
       await this.requireTask(client, taskId, projectId);
       await this.requireTask(client, dependsOn, projectId);
       if (await this.reaches(client, dependsOn, taskId))
@@ -641,24 +846,40 @@ export class TaskService {
         [taskId, dependsOn],
       );
       await appendTaskEvent(client, taskId, {
-        type: 'task.dependency_added', version: 0, actor: origin.actor, payload: { depends_on: dependsOn },
+        type: 'task.dependency_added',
+        version: 0,
+        actor: origin.actor,
+        payload: { depends_on: dependsOn },
       });
       await recordAudit(clientExecutor(client), {
-        projectId, actor: origin.actor, action: 'task.dependency_added', subject: `task:${taskId}`,
+        projectId,
+        actor: origin.actor,
+        action: 'task.dependency_added',
+        subject: `task:${taskId}`,
       });
       await this.syncReadiness(client, projectId, taskId, origin);
     });
   }
 
-  async removeDependency(taskId: string, projectId: string, dependsOn: string, origin: Origin): Promise<void> {
+  async removeDependency(
+    taskId: string,
+    projectId: string,
+    dependsOn: string,
+    origin: Origin,
+  ): Promise<void> {
     await withTransaction(this.pool, async (client) => {
-      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`${projectId}:task-deps`]);
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+        `${projectId}:task-deps`,
+      ]);
       await client.query(
         `DELETE FROM task_dependencies WHERE task_id = $1 AND depends_on_task_id = $2`,
         [taskId, dependsOn],
       );
       await appendTaskEvent(client, taskId, {
-        type: 'task.dependency_removed', version: 0, actor: origin.actor, payload: { depends_on: dependsOn },
+        type: 'task.dependency_removed',
+        version: 0,
+        actor: origin.actor,
+        payload: { depends_on: dependsOn },
       });
       await this.syncReadiness(client, projectId, taskId, origin);
     });
@@ -676,7 +897,9 @@ export class TaskService {
   /** Promote every eligible backlog task (all dependencies completed) to ready. */
   async computeReady(projectId: string, origin: Origin): Promise<TaskSnapshot[]> {
     return withTransaction(this.pool, async (client) => {
-      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`${projectId}:task-deps`]);
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+        `${projectId}:task-deps`,
+      ]);
       const res = await client.query(
         `SELECT id FROM tasks WHERE project_id = $1 AND state IN ('backlog','ready') ORDER BY id`,
         [projectId],
@@ -712,7 +935,11 @@ export class TaskService {
   // -------------------------------------------------------------------------
   // Internal helpers (operate on a locked client within a transaction)
   // -------------------------------------------------------------------------
-  private async hasPassingValidation(client: Client, projectId: string, taskId: string): Promise<boolean> {
+  private async hasPassingValidation(
+    client: Client,
+    projectId: string,
+    taskId: string,
+  ): Promise<boolean> {
     const res = await client.query(
       `SELECT 1 FROM validation_runs WHERE project_id = $1 AND task_id = $2 AND state = 'passed' LIMIT 1`,
       [projectId, taskId],
@@ -721,12 +948,18 @@ export class TaskService {
   }
 
   private async requireTask(client: Client, taskId: string, projectId: string): Promise<void> {
-    const res = await client.query('SELECT 1 FROM tasks WHERE id = $1 AND project_id = $2', [taskId, projectId]);
+    const res = await client.query('SELECT 1 FROM tasks WHERE id = $1 AND project_id = $2', [
+      taskId,
+      projectId,
+    ]);
     if (res.rows.length === 0) throw new TaskError('not_found', `task ${taskId} not found`);
   }
 
   private async requireTaskPool(taskId: string, projectId: string): Promise<void> {
-    const res = await this.pool.query('SELECT 1 FROM tasks WHERE id = $1 AND project_id = $2', [taskId, projectId]);
+    const res = await this.pool.query('SELECT 1 FROM tasks WHERE id = $1 AND project_id = $2', [
+      taskId,
+      projectId,
+    ]);
     if (res.rows.length === 0) throw new TaskError('not_found', `task ${taskId} not found`);
   }
 
@@ -738,7 +971,12 @@ export class TaskService {
     const row = res.rows[0];
     if (!row) return null;
     if (row.user_id != null)
-      return { user_id: String(row.user_id), agent: row.agent_provider ? { provider: String(row.agent_provider), adapter: 'server' } : null };
+      return {
+        user_id: String(row.user_id),
+        agent: row.agent_provider
+          ? { provider: String(row.agent_provider), adapter: 'server' }
+          : null,
+      };
     return null;
   }
 
@@ -771,7 +1009,12 @@ export class TaskService {
   }
 
   /** Adjust a single task between backlog/ready based on dependency satisfaction. */
-  private async syncReadiness(client: Client, projectId: string, taskId: string, origin: Origin): Promise<TaskSnapshot | null> {
+  private async syncReadiness(
+    client: Client,
+    projectId: string,
+    taskId: string,
+    origin: Origin,
+  ): Promise<TaskSnapshot | null> {
     const current = await lockSnapshot(client, taskId, projectId);
     const satisfied = await this.depsCompleted(client, taskId);
     let target: TaskState | null = null;
@@ -780,17 +1023,37 @@ export class TaskService {
     if (!target || !canTransition(current.state, target)) return null;
     const version = current.version + 1;
     const payload = { from: current.state, to: target, version, reason: 'dependency readiness' };
-    const next = applyTaskEvent(current, { type: 'task.state_changed', version, actor: origin.actor, payload }) as TaskSnapshot;
+    const next = applyTaskEvent(current, {
+      type: 'task.state_changed',
+      version,
+      actor: origin.actor,
+      payload,
+    }) as TaskSnapshot;
     await writeSnapshot(client, next);
-    await appendTaskEvent(client, taskId, { type: 'task.state_changed', version, actor: origin.actor, payload });
+    await appendTaskEvent(client, taskId, {
+      type: 'task.state_changed',
+      version,
+      actor: origin.actor,
+      payload,
+    });
     await appendCoordinationEvent(client, {
-      projectId, deviceId: origin.deviceId, type: 'task.state_changed', actor: origin.actor, payload, taskId,
+      projectId,
+      deviceId: origin.deviceId,
+      type: 'task.state_changed',
+      actor: origin.actor,
+      payload,
+      taskId,
     });
     return next;
   }
 
   /** After a task completes, promote any dependents whose deps are now satisfied. */
-  private async promoteDependents(client: Client, projectId: string, completedTaskId: string, origin: Origin): Promise<void> {
+  private async promoteDependents(
+    client: Client,
+    projectId: string,
+    completedTaskId: string,
+    origin: Origin,
+  ): Promise<void> {
     const res = await client.query(
       `SELECT task_id FROM task_dependencies WHERE depends_on_task_id = $1 ORDER BY task_id`,
       [completedTaskId],

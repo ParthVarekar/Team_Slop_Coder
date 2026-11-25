@@ -46,7 +46,11 @@ describe('deriveSessions', () => {
   it('applies status then ended in stream order', () => {
     const sessions = deriveSessions([
       ev('session.started', { session_id: 's1', actor: PRIYA }),
-      ev('session.status', { session_id: 's1', actor: PRIYA, payload: { status: 'waiting_permission' } }),
+      ev('session.status', {
+        session_id: 's1',
+        actor: PRIYA,
+        payload: { status: 'waiting_permission' },
+      }),
       ev('session.ended', { session_id: 's1', actor: PRIYA, payload: { reason: 'completed' } }),
     ]);
     const s = sessions[0]!;
@@ -143,7 +147,9 @@ describe('sessionDeveloperLabel', () => {
   });
 
   it('falls back to "agent" as the provider but still attributes the developer', () => {
-    expect(sessionDeveloperLabel({ ...base, provider_id: null }, directory)).toBe('agent for Priya');
+    expect(sessionDeveloperLabel({ ...base, provider_id: null }, directory)).toBe(
+      'agent for Priya',
+    );
   });
 
   it('renders the provider alone when the session has no developer_id', () => {

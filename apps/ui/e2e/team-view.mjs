@@ -75,7 +75,8 @@ async function teardown() {
 async function main() {
   assert.ok(existsSync(serverDist), 'server dist missing — run pnpm build first');
 
-  const EmbeddedPostgres = (await import(pathToFileURL(req.resolve('embedded-postgres')).href)).default;
+  const EmbeddedPostgres = (await import(pathToFileURL(req.resolve('embedded-postgres')).href))
+    .default;
   const { createServer } = await import(pathToFileURL(serverDist).href);
   const { makeId, ulid, PROTOCOL_VERSION } = await import(
     pathToFileURL(join(root, 'packages', 'protocol', 'dist', 'index.js')).href
@@ -101,7 +102,14 @@ async function main() {
   const port = await freePort();
   const adminSecret = 'e2e-admin-secret';
   server = await createServer(
-    { dataDir: join(temp, 'server'), host: '127.0.0.1', port, databaseUrl, logLevel: 'fatal', corsOrigin: '*' },
+    {
+      dataDir: join(temp, 'server'),
+      host: '127.0.0.1',
+      port,
+      databaseUrl,
+      logLevel: 'fatal',
+      corsOrigin: '*',
+    },
     { adminSecret, onShutdown: () => {} },
   );
   const baseUrl = await server.listen();
@@ -117,18 +125,59 @@ async function main() {
   const deviceId = makeId('device');
   const sesPriya = makeId('session');
   const sesMarcus = makeId('session');
-  await pool.query('INSERT INTO organizations (id, name, slug) VALUES ($1,$2,$3)', [orgId, 'E2E Org', `org-${orgId}`]);
-  await pool.query('INSERT INTO teams (id, org_id, name, slug) VALUES ($1,$2,$3,$4)', [teamId, orgId, 'E2E Team', `team-${teamId}`]);
-  await pool.query('INSERT INTO projects (id, team_id, name, slug) VALUES ($1,$2,$3,$4)', [projectId, teamId, 'Team Project', `proj-${projectId}`]);
-  await pool.query('INSERT INTO users (id, org_id, email, display_name) VALUES ($1,$2,$3,$4)', [priya, orgId, 'priya@e2e.local', 'Priya']);
-  await pool.query('INSERT INTO users (id, org_id, email, display_name) VALUES ($1,$2,$3,$4)', [marcus, orgId, 'marcus@e2e.local', 'Marcus']);
-  await pool.query('INSERT INTO project_members (project_id, user_id, role) VALUES ($1,$2,$3)', [projectId, priya, 'member']);
-  await pool.query('INSERT INTO project_members (project_id, user_id, role) VALUES ($1,$2,$3)', [projectId, marcus, 'member']);
-  await pool.query('INSERT INTO devices (id, user_id, hostname, os) VALUES ($1,$2,$3,$4)', [deviceId, priya, 'e2e-host', 'linux']);
+  await pool.query('INSERT INTO organizations (id, name, slug) VALUES ($1,$2,$3)', [
+    orgId,
+    'E2E Org',
+    `org-${orgId}`,
+  ]);
+  await pool.query('INSERT INTO teams (id, org_id, name, slug) VALUES ($1,$2,$3,$4)', [
+    teamId,
+    orgId,
+    'E2E Team',
+    `team-${teamId}`,
+  ]);
+  await pool.query('INSERT INTO projects (id, team_id, name, slug) VALUES ($1,$2,$3,$4)', [
+    projectId,
+    teamId,
+    'Team Project',
+    `proj-${projectId}`,
+  ]);
+  await pool.query('INSERT INTO users (id, org_id, email, display_name) VALUES ($1,$2,$3,$4)', [
+    priya,
+    orgId,
+    'priya@e2e.local',
+    'Priya',
+  ]);
+  await pool.query('INSERT INTO users (id, org_id, email, display_name) VALUES ($1,$2,$3,$4)', [
+    marcus,
+    orgId,
+    'marcus@e2e.local',
+    'Marcus',
+  ]);
+  await pool.query('INSERT INTO project_members (project_id, user_id, role) VALUES ($1,$2,$3)', [
+    projectId,
+    priya,
+    'member',
+  ]);
+  await pool.query('INSERT INTO project_members (project_id, user_id, role) VALUES ($1,$2,$3)', [
+    projectId,
+    marcus,
+    'member',
+  ]);
+  await pool.query('INSERT INTO devices (id, user_id, hostname, os) VALUES ($1,$2,$3,$4)', [
+    deviceId,
+    priya,
+    'e2e-host',
+    'linux',
+  ]);
 
   const admin = { authorization: `Bearer ${adminSecret}`, 'content-type': 'application/json' };
   const ingest = (events) =>
-    fetch(`${baseUrl}/v1/ingest`, { method: 'POST', headers: admin, body: JSON.stringify({ events }) });
+    fetch(`${baseUrl}/v1/ingest`, {
+      method: 'POST',
+      headers: admin,
+      body: JSON.stringify({ events }),
+    });
   const event = (type, actor, extra = {}) => ({
     v: PROTOCOL_VERSION,
     event_id: ulid(),
@@ -152,18 +201,44 @@ async function main() {
   const { token } = await tokRes.json();
 
   // Two developers' sessions + an approval notification addressed to Priya.
-  const priyaAgent = { user_id: priya, agent: { provider: 'Claude Code', model: 'opus', adapter: 'hooks@1.4.0' } };
-  const marcusAgent = { user_id: marcus, agent: { provider: 'Codex', model: 'gpt-5', adapter: 'hooks@1.4.0' } };
+  const priyaAgent = {
+    user_id: priya,
+    agent: { provider: 'Claude Code', model: 'opus', adapter: 'hooks@1.4.0' },
+  };
+  const marcusAgent = {
+    user_id: marcus,
+    agent: { provider: 'Codex', model: 'gpt-5', adapter: 'hooks@1.4.0' },
+  };
   const seeded = await ingest([
-    event('session.started', priyaAgent, { session_id: sesPriya, payload: { cwd: '/repo', prompt_summary: 'Implement the team stream', fidelity: 'high' } }),
-    event('session.started', marcusAgent, { session_id: sesMarcus, payload: { cwd: '/repo', prompt_summary: 'Fix the parser', fidelity: 'high' } }),
-    event('notification.created', { user_id: marcus, agent: null }, { payload: { kind: 'approval', title: 'Review the merge queue', subject: 'Please review the merge', target_user_id: priya } }),
+    event('session.started', priyaAgent, {
+      session_id: sesPriya,
+      payload: { cwd: '/repo', prompt_summary: 'Implement the team stream', fidelity: 'high' },
+    }),
+    event('session.started', marcusAgent, {
+      session_id: sesMarcus,
+      payload: { cwd: '/repo', prompt_summary: 'Fix the parser', fidelity: 'high' },
+    }),
+    event(
+      'notification.created',
+      { user_id: marcus, agent: null },
+      {
+        payload: {
+          kind: 'approval',
+          title: 'Review the merge queue',
+          subject: 'Please review the merge',
+          target_user_id: priya,
+        },
+      },
+    ),
   ]);
   assert.equal(seeded.status, 202);
   const seededBody = await seeded.json();
   assert.equal(seededBody.accepted.length, 3, JSON.stringify(seededBody.rejected));
   // global_seq is monotonic across the batch — the shared stream ordering key.
-  assert.deepEqual(seededBody.accepted.map((a) => a.global_seq), [1, 2, 3]);
+  assert.deepEqual(
+    seededBody.accepted.map((a) => a.global_seq),
+    [1, 2, 3],
+  );
   console.log('✓ seeded team world (2 developers, 3 events, global_seq 1..3)');
 
   // Vite dev server. Team mode talks to the server cross-origin (CORS), not the proxy.
@@ -229,11 +304,11 @@ async function main() {
   const inboxRes = await fetch(`${baseUrl}/v1/notifications?projectId=${projectId}&state=inbox`, {
     headers: { authorization: `Bearer ${token}` },
   });
-  assert.equal(((await inboxRes.json()).notifications).length, 0);
+  assert.equal((await inboxRes.json()).notifications.length, 0);
   const doneRes = await fetch(`${baseUrl}/v1/notifications?projectId=${projectId}&state=done`, {
     headers: { authorization: `Bearer ${token}` },
   });
-  assert.equal(((await doneRes.json()).notifications).length, 1);
+  assert.equal((await doneRes.json()).notifications.length, 1);
   console.log('✓ triage persisted server-side (inbox 0, done 1)');
 
   assert.deepEqual(pageErrors, [], `page errors: ${pageErrors.join('; ')}`);

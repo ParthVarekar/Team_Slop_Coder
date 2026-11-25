@@ -25,7 +25,9 @@ describe('groupEvents', () => {
   });
 
   it('wraps a single event in a group labelled by its summary', () => {
-    const groups = groupEvents([ev('file.changed', { payload: { path: 'a.ts', change_kind: 'modify' } })]);
+    const groups = groupEvents([
+      ev('file.changed', { payload: { path: 'a.ts', change_kind: 'modify' } }),
+    ]);
     expect(groups).toHaveLength(1);
     expect(groups[0]?.events).toHaveLength(1);
     expect(groups[0]?.label).toBe('modify a.ts');

@@ -418,7 +418,15 @@ export class OverlapEngine {
     cache.result = result;
     sweepLatency.observe(duration_ms);
     this.options.logger?.debug(
-      { repoId, baseRef, epoch, overlaps: overlaps.length, impacts: impacts.length, emitted, duration_ms },
+      {
+        repoId,
+        baseRef,
+        epoch,
+        overlaps: overlaps.length,
+        impacts: impacts.length,
+        emitted,
+        duration_ms,
+      },
       'symbol overlap sweep',
     );
     return result;

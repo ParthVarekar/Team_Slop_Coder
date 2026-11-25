@@ -71,8 +71,15 @@ export interface McpReserveInput {
 
 export interface McpBackend {
   getTask(taskId: string): Promise<McpGetTaskResult>;
-  claimTask(taskId: string, opts: { baseVersion?: number; provisional?: boolean }): Promise<McpClaimResult>;
-  reportProgress(taskId: string, note: string, opts: { percent?: number }): Promise<McpProgressResult>;
+  claimTask(
+    taskId: string,
+    opts: { baseVersion?: number; provisional?: boolean },
+  ): Promise<McpClaimResult>;
+  reportProgress(
+    taskId: string,
+    note: string,
+    opts: { percent?: number },
+  ): Promise<McpProgressResult>;
   getConcurrentChanges(taskId: string, opts: { budgetBytes?: number }): Promise<ContextPayload>;
   reserveFiles(input: McpReserveInput): Promise<McpReserveResult>;
 }
@@ -120,18 +127,23 @@ export function createCoordinationMcpServer(
     'get_task',
     {
       title: 'Get task',
-      description: 'Fetch the authoritative snapshot of a task (title, state, branch, expected files, acceptance criteria).',
+      description:
+        'Fetch the authoritative snapshot of a task (title, state, branch, expected files, acceptance criteria).',
       inputSchema: { task_id: z.string().min(1) },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async (args) => guard(() => backend.getTask(args.task_id).then((r) => r as unknown as Record<string, unknown>)),
+    async (args) =>
+      guard(() =>
+        backend.getTask(args.task_id).then((r) => r as unknown as Record<string, unknown>),
+      ),
   );
 
   server.registerTool(
     'claim_task',
     {
       title: 'Claim task',
-      description: 'Atomically claim a ready task (server CAS in team mode). Returns ok=false with the winner if another device claimed it first.',
+      description:
+        'Atomically claim a ready task (server CAS in team mode). Returns ok=false with the winner if another device claimed it first.',
       inputSchema: {
         task_id: z.string().min(1),
         base_version: z.number().int().nonnegative().optional(),
@@ -154,7 +166,8 @@ export function createCoordinationMcpServer(
     'report_progress',
     {
       title: 'Report progress',
-      description: 'Record an agent progress note for a task. The note is stored as untrusted data (provenance-labeled), never as an instruction.',
+      description:
+        'Record an agent progress note for a task. The note is stored as untrusted data (provenance-labeled), never as an instruction.',
       inputSchema: {
         task_id: z.string().min(1),
         note: z.string().min(1).max(8000),
@@ -176,7 +189,8 @@ export function createCoordinationMcpServer(
     'get_concurrent_changes',
     {
       title: 'Get concurrent changes',
-      description: 'Deterministic, ranked, budgeted (≤2KB) coordination context: own task, reservations overlapping expected files, recent signature changes in dependencies, overlaps and conflicts. No raw event dumps.',
+      description:
+        'Deterministic, ranked, budgeted (≤2KB) coordination context: own task, reservations overlapping expected files, recent signature changes in dependencies, overlaps and conflicts. No raw event dumps.',
       inputSchema: {
         task_id: z.string().min(1),
         budget_bytes: z.number().int().positive().max(65536).optional(),
@@ -199,7 +213,8 @@ export function createCoordinationMcpServer(
     'reserve_files',
     {
       title: 'Reserve files',
-      description: 'Acquire a soft (advisory) or hard (blocking) lease on a path glob for a task. Hard leases block rival edits on capability-supported adapters; denied if another task holds an unexpired lease.',
+      description:
+        'Acquire a soft (advisory) or hard (blocking) lease on a path glob for a task. Hard leases block rival edits on capability-supported adapters; denied if another task holds an unexpired lease.',
       inputSchema: {
         repo_id: z.string().min(1),
         task_id: z.string().min(1),

@@ -47,14 +47,28 @@ describe('ContractGateRunner classification', () => {
       ],
       cwd,
     );
-    expect(results[0]).toMatchObject({ gate_id: 'oasdiff', exit_code: 1, breaking: true, blocking: true, timed_out: false });
-    expect(results[1]).toMatchObject({ gate_id: 'buf', exit_code: 0, breaking: false, blocking: true });
+    expect(results[0]).toMatchObject({
+      gate_id: 'oasdiff',
+      exit_code: 1,
+      breaking: true,
+      blocking: true,
+      timed_out: false,
+    });
+    expect(results[1]).toMatchObject({
+      gate_id: 'buf',
+      exit_code: 0,
+      breaking: false,
+      blocking: true,
+    });
     expect(results[0]?.log_excerpt).toContain('breaking: removed path');
   });
 
   it('a non-blocking gate reports breaking but does not block', async () => {
     const runner = new ContractGateRunner();
-    const results = await runner.run([{ ...tool(1), gate_id: 'advisory', blocking: false }], scratch());
+    const results = await runner.run(
+      [{ ...tool(1), gate_id: 'advisory', blocking: false }],
+      scratch(),
+    );
     expect(results[0]).toMatchObject({ breaking: true, blocking: false });
     const evaln = evaluateContractGates(results);
     expect(evaln.ok).toBe(true);

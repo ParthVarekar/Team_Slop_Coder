@@ -10,7 +10,10 @@ const taskA = makeId('task');
 const taskB = makeId('task');
 
 const human: Actor = { user_id: 'user_test', agent: null };
-const agent: Actor = { user_id: 'user_test', agent: { provider: 'claude-code', adapter: 'claude-code' } };
+const agent: Actor = {
+  user_id: 'user_test',
+  agent: { provider: 'claude-code', adapter: 'claude-code' },
+};
 
 let counter = 0;
 function stored(
@@ -56,7 +59,10 @@ function signatureImpact(key: string, affected: string[], repo = repoId) {
           old_signature: '(s: string) => number',
           new_signature: '(s: string, opts?: O) => number',
           affected_task_ids: affected,
-          callers: [{ file_path: 'src/c.ts', name: 'run' }, { file_path: 'src/d.ts', name: 'main' }],
+          callers: [
+            { file_path: 'src/c.ts', name: 'run' },
+            { file_path: 'src/d.ts', name: 'main' },
+          ],
         },
       ],
     },
@@ -74,7 +80,14 @@ function symbolOverlap(key: string, taskIds: string[], repo = repoId) {
       paths: ['src/b.ts'],
       task_ids: taskIds,
       repo_id: repo,
-      evidence: [{ symbols: [{ name: 'Widget', file_path: 'src/b.ts' }, { name: '', file_path: 'x' }] }],
+      evidence: [
+        {
+          symbols: [
+            { name: 'Widget', file_path: 'src/b.ts' },
+            { name: '', file_path: 'x' },
+          ],
+        },
+      ],
     },
     { repoId: repo },
   );
@@ -133,7 +146,18 @@ describe('ChangeCache — symbol overlaps & conflicts', () => {
 
   it('tracks generic conflicts without evidence and resolves them', () => {
     cache.applyEvent(
-      stored('conflict.detected', { canonical_key: 'cf:1', kind: 'file_overlap', severity: 'warning', paths: ['src/a.ts'], task_ids: [taskA, taskB], repo_id: repoId }, { repoId }),
+      stored(
+        'conflict.detected',
+        {
+          canonical_key: 'cf:1',
+          kind: 'file_overlap',
+          severity: 'warning',
+          paths: ['src/a.ts'],
+          task_ids: [taskA, taskB],
+          repo_id: repoId,
+        },
+        { repoId },
+      ),
     );
     expect(cache.openConflicts().map((c) => c.canonical_key)).toEqual(['cf:1']);
     expect(cache.impactsFor(taskA)).toHaveLength(0);
@@ -144,7 +168,13 @@ describe('ChangeCache — symbol overlaps & conflicts', () => {
 
   it('sorts open conflicts deterministically by canonical key', () => {
     for (const key of ['cf:z', 'cf:a', 'cf:m']) {
-      cache.applyEvent(stored('conflict.detected', { canonical_key: key, kind: 'file_overlap', paths: [], task_ids: [], repo_id: repoId }, { repoId }));
+      cache.applyEvent(
+        stored(
+          'conflict.detected',
+          { canonical_key: key, kind: 'file_overlap', paths: [], task_ids: [], repo_id: repoId },
+          { repoId },
+        ),
+      );
     }
     expect(cache.openConflicts().map((c) => c.canonical_key)).toEqual(['cf:a', 'cf:m', 'cf:z']);
   });
@@ -152,15 +182,37 @@ describe('ChangeCache — symbol overlaps & conflicts', () => {
 
 describe('ChangeCache — progress provenance', () => {
   it('labels agent-authored notes as agent and human notes as human', () => {
-    cache.applyEvent(stored('task.progress', { summary: 'agent note', percent: 40 }, { actor: agent, taskId: taskA }));
-    cache.applyEvent(stored('task.progress', { summary: 'human note' }, { actor: human, taskId: taskB }));
-    expect(cache.progressFor(taskA)).toMatchObject({ summary: 'agent note', percent: 40, provenance: 'agent' });
-    expect(cache.progressFor(taskB)).toMatchObject({ summary: 'human note', percent: null, provenance: 'human' });
+    cache.applyEvent(
+      stored(
+        'task.progress',
+        { summary: 'agent note', percent: 40 },
+        { actor: agent, taskId: taskA },
+      ),
+    );
+    cache.applyEvent(
+      stored('task.progress', { summary: 'human note' }, { actor: human, taskId: taskB }),
+    );
+    expect(cache.progressFor(taskA)).toMatchObject({
+      summary: 'agent note',
+      percent: 40,
+      provenance: 'agent',
+    });
+    expect(cache.progressFor(taskB)).toMatchObject({
+      summary: 'human note',
+      percent: null,
+      provenance: 'human',
+    });
   });
 
   it('keeps only the latest progress per task and ignores missing summaries', () => {
-    cache.applyEvent(stored('task.progress', { summary: 'first' }, { actor: agent, taskId: taskA }));
-    const latest = stored('task.progress', { summary: 'second', percent: 90 }, { actor: agent, taskId: taskA });
+    cache.applyEvent(
+      stored('task.progress', { summary: 'first' }, { actor: agent, taskId: taskA }),
+    );
+    const latest = stored(
+      'task.progress',
+      { summary: 'second', percent: 90 },
+      { actor: agent, taskId: taskA },
+    );
     cache.applyEvent(latest);
     cache.applyEvent(stored('task.progress', { percent: 10 }, { actor: agent, taskId: taskA }));
     expect(cache.progressFor(taskA)?.summary).toBe('second');
@@ -188,7 +240,12 @@ describe('ChangeCache — replay, staleness, reset', () => {
     expect(cache.isStale()).toBe(true);
     cache.clear();
     expect(cache.getCursor()).toBe(0);
-    expect(cache.snapshot()).toMatchObject({ conflicts: [], impacts: [], overlaps: [], progress: [] });
+    expect(cache.snapshot()).toMatchObject({
+      conflicts: [],
+      impacts: [],
+      overlaps: [],
+      progress: [],
+    });
   });
 
   it('ignores unrelated event types', () => {

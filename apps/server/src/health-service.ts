@@ -101,7 +101,8 @@ function rowToRegression(r: Record<string, unknown>): Regression {
   };
 }
 
-export type HealthErrorCode = 'not_found' | 'validation' | 'invalid_transition' | 'evidence_required';
+export type HealthErrorCode =
+  'not_found' | 'validation' | 'invalid_transition' | 'evidence_required';
 
 export class HealthError extends Error {
   constructor(
@@ -208,8 +209,13 @@ export class HealthService {
            (id, project_id, repo_id, branch, commit_oid, state, validation_run_id, check_results_summary)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
         [
-          baseline.id, projectId, baseline.repo_id, baseline.branch, baseline.commit_oid,
-          baseline.state, baseline.validation_run_id,
+          baseline.id,
+          projectId,
+          baseline.repo_id,
+          baseline.branch,
+          baseline.commit_oid,
+          baseline.state,
+          baseline.validation_run_id,
           baseline.check_results_summary ? JSON.stringify(baseline.check_results_summary) : null,
         ],
       );
@@ -222,7 +228,9 @@ export class HealthService {
         payload: {
           branch: baseline.branch,
           commit_oid: baseline.commit_oid,
-          ...(baseline.check_results_summary ? { checks_summary: baseline.check_results_summary } : {}),
+          ...(baseline.check_results_summary
+            ? { checks_summary: baseline.check_results_summary }
+            : {}),
         },
       });
       await this.audit(client, projectId, origin.actor, 'health.baseline_established', baseline.id);
@@ -306,7 +314,13 @@ export class HealthService {
         { ...regression, suspected_changes: ranked },
         origin.actor,
       );
-      await this.audit(client, projectId, origin.actor, 'health.regression_attributed', regressionId);
+      await this.audit(
+        client,
+        projectId,
+        origin.actor,
+        'health.regression_attributed',
+        regressionId,
+      );
       return ranked;
     });
   }
@@ -344,7 +358,13 @@ export class HealthService {
         [projectId, regressionId, next.confirmed_change_id, next.revert_oid],
       );
       await this.emitRegression(client, projectId, next, origin.actor);
-      await this.audit(client, projectId, origin.actor, 'health.regression_confirmed', regressionId);
+      await this.audit(
+        client,
+        projectId,
+        origin.actor,
+        'health.regression_confirmed',
+        regressionId,
+      );
       regressionsConfirmed.inc();
       this.logger?.debug(
         { projectId, regressionId, culprit: next.confirmed_change_id },
@@ -362,7 +382,11 @@ export class HealthService {
     return res.rows[0] ? rowToBaseline(res.rows[0]) : undefined;
   }
 
-  async latestBaseline(projectId: string, repoId: string, branch: string): Promise<HealthBaseline | undefined> {
+  async latestBaseline(
+    projectId: string,
+    repoId: string,
+    branch: string,
+  ): Promise<HealthBaseline | undefined> {
     const res = await this.pool.query(
       `SELECT ${BASELINE_COLS} FROM health_baselines
         WHERE project_id=$1 AND repo_id=$2 AND branch=$3 AND state='healthy'
@@ -380,7 +404,10 @@ export class HealthService {
     return res.rows[0] ? rowToRegression(res.rows[0]) : undefined;
   }
 
-  async listBaselines(projectId: string, options: HealthListOptions = {}): Promise<HealthBaseline[]> {
+  async listBaselines(
+    projectId: string,
+    options: HealthListOptions = {},
+  ): Promise<HealthBaseline[]> {
     const params: unknown[] = [projectId];
     let where = 'project_id=$1';
     if (options.repoId) {
@@ -422,7 +449,11 @@ export class HealthService {
     if (res.rows.length === 0) throw new HealthError('not_found', `project ${projectId} not found`);
   }
 
-  private async lockRegression(client: Client, projectId: string, regressionId: string): Promise<Regression> {
+  private async lockRegression(
+    client: Client,
+    projectId: string,
+    regressionId: string,
+  ): Promise<Regression> {
     const res = await client.query(
       `SELECT ${REGRESSION_COLS} FROM regressions WHERE project_id=$1 AND id=$2 FOR UPDATE`,
       [projectId, regressionId],
@@ -439,15 +470,26 @@ export class HealthService {
           failing_checks, suspected_changes, confirmed_change_id, revert_oid)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
       [
-        r.id, r.project_id, r.repo_id, r.baseline_id, r.failure_fingerprint, r.state,
+        r.id,
+        r.project_id,
+        r.repo_id,
+        r.baseline_id,
+        r.failure_fingerprint,
+        r.state,
         r.failing_checks ? JSON.stringify(r.failing_checks) : null,
         r.suspected_changes ? JSON.stringify(r.suspected_changes) : null,
-        r.confirmed_change_id, r.revert_oid,
+        r.confirmed_change_id,
+        r.revert_oid,
       ],
     );
   }
 
-  private async emitRegression(client: Client, projectId: string, r: Regression, actor: Actor): Promise<void> {
+  private async emitRegression(
+    client: Client,
+    projectId: string,
+    r: Regression,
+    actor: Actor,
+  ): Promise<void> {
     await appendCoordinationEvent(client, {
       projectId,
       deviceId: this.serverDeviceId,
@@ -465,7 +507,13 @@ export class HealthService {
     });
   }
 
-  private async audit(client: Client, projectId: string, actor: Actor, action: string, subjectId: string): Promise<void> {
+  private async audit(
+    client: Client,
+    projectId: string,
+    actor: Actor,
+    action: string,
+    subjectId: string,
+  ): Promise<void> {
     await recordAudit(clientExecutor(client), {
       projectId,
       actor,

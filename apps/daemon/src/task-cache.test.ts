@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ulid, makeId, PROTOCOL_VERSION, type StoredEvent, type TaskSnapshot } from '@weft/protocol';
+import {
+  ulid,
+  makeId,
+  PROTOCOL_VERSION,
+  type StoredEvent,
+  type TaskSnapshot,
+} from '@weft/protocol';
 import { TaskCache } from './task-cache.js';
 
 const PROJECT = makeId('project');
@@ -30,7 +36,12 @@ function snapshot(overrides: Partial<TaskSnapshot> = {}): TaskSnapshot {
   };
 }
 
-function ev(seq: number, type: string, payload: Record<string, unknown>, taskId = TASK): StoredEvent {
+function ev(
+  seq: number,
+  type: string,
+  payload: Record<string, unknown>,
+  taskId = TASK,
+): StoredEvent {
   return {
     v: PROTOCOL_VERSION,
     event_id: ulid(),
@@ -58,9 +69,17 @@ describe('daemon task cache', () => {
   it('folds updates, state changes, claims and releases', () => {
     const cache = new TaskCache();
     cache.applyEvent(ev(1, 'task.created', { version: 0, snapshot: snapshot() }));
-    cache.applyEvent(ev(2, 'task.updated', { version: 1, values: { title: 'Renamed' }, edit_conflict: null }));
+    cache.applyEvent(
+      ev(2, 'task.updated', { version: 1, values: { title: 'Renamed' }, edit_conflict: null }),
+    );
     cache.applyEvent(ev(3, 'task.state_changed', { from: 'backlog', to: 'ready', version: 2 }));
-    cache.applyEvent(ev(4, 'task.claimed', { version: 3, claimant: { user_id: 'u', agent: null }, device_id: DEVICE }));
+    cache.applyEvent(
+      ev(4, 'task.claimed', {
+        version: 3,
+        claimant: { user_id: 'u', agent: null },
+        device_id: DEVICE,
+      }),
+    );
     expect(cache.getTask(TASK)?.state).toBe('claimed');
     expect(cache.getTask(TASK)?.title).toBe('Renamed');
     cache.applyEvent(ev(5, 'task.released', { version: 4, to: 'ready' }));
@@ -71,7 +90,9 @@ describe('daemon task cache', () => {
   it('preserves edit_conflict from the fold', () => {
     const cache = new TaskCache();
     cache.applyEvent(ev(1, 'task.created', { version: 0, snapshot: snapshot() }));
-    const conflict = { title: { current: 'A', incoming: 'B', base_version: 0, detected_at_version: 1 } };
+    const conflict = {
+      title: { current: 'A', incoming: 'B', base_version: 0, detected_at_version: 1 },
+    };
     cache.applyEvent(ev(2, 'task.updated', { version: 1, values: {}, edit_conflict: conflict }));
     expect(cache.getTask(TASK)?.edit_conflict).toEqual(conflict);
   });
@@ -103,9 +124,15 @@ describe('daemon task cache', () => {
   it('ignores replayed events at or below the cursor', () => {
     const cache = new TaskCache();
     cache.applyEvent(ev(1, 'task.created', { version: 0, snapshot: snapshot() }));
-    cache.applyEvent(ev(2, 'task.updated', { version: 1, values: { title: 'Second' }, edit_conflict: null }));
-    cache.applyEvent(ev(2, 'task.updated', { version: 1, values: { title: 'Replay' }, edit_conflict: null }));
-    cache.applyEvent(ev(1, 'task.updated', { version: 1, values: { title: 'Old' }, edit_conflict: null }));
+    cache.applyEvent(
+      ev(2, 'task.updated', { version: 1, values: { title: 'Second' }, edit_conflict: null }),
+    );
+    cache.applyEvent(
+      ev(2, 'task.updated', { version: 1, values: { title: 'Replay' }, edit_conflict: null }),
+    );
+    cache.applyEvent(
+      ev(1, 'task.updated', { version: 1, values: { title: 'Old' }, edit_conflict: null }),
+    );
     expect(cache.getTask(TASK)?.title).toBe('Second');
     expect(cache.getCursor()).toBe(2);
   });
@@ -120,7 +147,9 @@ describe('daemon task cache', () => {
   it('clear() resets the projection for a forced resync', () => {
     const cache = new TaskCache();
     cache.applyEvent(ev(1, 'task.created', { version: 0, snapshot: snapshot() }));
-    cache.applyEvent(ev(2, 'task.claim_rejected', { version: 1, provisional: true, device_id: DEVICE }));
+    cache.applyEvent(
+      ev(2, 'task.claim_rejected', { version: 1, provisional: true, device_id: DEVICE }),
+    );
     cache.clear();
     expect(cache.getCursor()).toBe(0);
     expect(cache.listTasks()).toHaveLength(0);

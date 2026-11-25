@@ -1,7 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { makeId } from '@weft/protocol';
 import { openCentralDatabase, type CentralDatabase } from './db.js';
-import { MergeQueueService, MergeQueueError, type EnqueueMergeInput } from './merge-queue-service.js';
+import {
+  MergeQueueService,
+  MergeQueueError,
+  type EnqueueMergeInput,
+} from './merge-queue-service.js';
 import { TaskService } from './tasks-service.js';
 import type { Origin } from './tasks-service.js';
 import { startEmbeddedPostgres, type EmbeddedCluster } from '../test/embedded.js';
@@ -39,11 +43,19 @@ afterAll(async () => {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function makeTask(repoId: string): Promise<string> {
-  const snap = await tasks.create(world.projectA, { title: 'merge work', repoId, state: 'ready' }, origin);
+  const snap = await tasks.create(
+    world.projectA,
+    { title: 'merge work', repoId, state: 'ready' },
+    origin,
+  );
   return snap.id;
 }
 
-function enqueueInput(taskId: string, repoId: string, extra: Partial<EnqueueMergeInput> = {}): EnqueueMergeInput {
+function enqueueInput(
+  taskId: string,
+  repoId: string,
+  extra: Partial<EnqueueMergeInput> = {},
+): EnqueueMergeInput {
   return { repo_id: repoId, task_id: taskId, branch: `weft/${taskId}`, ...extra };
 }
 
@@ -62,7 +74,17 @@ async function insertRun(opts: {
        (id, project_id, repo_id, task_id, trigger, tree_oid, state, independence,
         runner_device_id, claimant_device_id, finished_at)
      VALUES ($1,$2,$3,$4,'queue',$5,$6,$7,$8,$9, now())`,
-    [id, world.projectA, opts.repoId, opts.taskId, opts.treeOid, opts.state, opts.independence, opts.runner, opts.claimant],
+    [
+      id,
+      world.projectA,
+      opts.repoId,
+      opts.taskId,
+      opts.treeOid,
+      opts.state,
+      opts.independence,
+      opts.runner,
+      opts.claimant,
+    ],
   );
   return id;
 }
@@ -86,10 +108,20 @@ async function auditCount(action: string, subject: string): Promise<number> {
 }
 
 /** Drive an entry to testing under a fresh lease held by `device`, returning the epoch. */
-async function claimHead(repoId: string, taskId: string, device: string): Promise<{ entryId: string; epoch: number }> {
+async function claimHead(
+  repoId: string,
+  taskId: string,
+  device: string,
+): Promise<{ entryId: string; epoch: number }> {
   const lease = await queue.acquireExecutorLease(world.projectA, repoId, device, origin, 60_000);
   await queue.enqueue(world.projectA, enqueueInput(taskId, repoId), origin);
-  const claimed = await queue.claimNext(world.projectA, repoId, device, lease.lease.lease_epoch, origin);
+  const claimed = await queue.claimNext(
+    world.projectA,
+    repoId,
+    device,
+    lease.lease.lease_epoch,
+    origin,
+  );
   if (!claimed) throw new Error('expected a claimable head');
   return { entryId: claimed.id, epoch: lease.lease.lease_epoch };
 }
@@ -151,7 +183,13 @@ describe('MergeQueueService executor lease election', () => {
     // expires_at = now+100, grace_until = now+500.
     await queue.acquireExecutorLease(world.projectA, repo, dead, origin, 100);
     await sleep(600); // past grace
-    const reclaimed = await queue.acquireExecutorLease(world.projectA, repo, successor, origin, 60_000);
+    const reclaimed = await queue.acquireExecutorLease(
+      world.projectA,
+      repo,
+      successor,
+      origin,
+      60_000,
+    );
     expect(reclaimed.status).toBe('acquired');
     expect(reclaimed.lease.holder_device_id).toBe(successor);
     expect(reclaimed.lease.lease_epoch).toBe(2);
@@ -188,18 +226,30 @@ describe('MergeQueueService queue lifecycle', () => {
     const task = await makeTask(repo);
     await queue.enqueue(world.projectA, enqueueInput(task, repo), origin);
     // No lease held yet.
-    await expect(
-      queue.claimNext(world.projectA, repo, device, 1, origin),
-    ).rejects.toMatchObject({ code: 'lease_required' });
+    await expect(queue.claimNext(world.projectA, repo, device, 1, origin)).rejects.toMatchObject({
+      code: 'lease_required',
+    });
 
     const lease = await queue.acquireExecutorLease(world.projectA, repo, device, origin, 60_000);
-    const claimed = await queue.claimNext(world.projectA, repo, device, lease.lease.lease_epoch, origin);
+    const claimed = await queue.claimNext(
+      world.projectA,
+      repo,
+      device,
+      lease.lease.lease_epoch,
+      origin,
+    );
     expect(claimed?.state).toBe('testing');
     expect(claimed?.executor_device_id).toBe(device);
     expect(claimed?.lease_epoch).toBe(lease.lease.lease_epoch);
     expect(await eventCount('merge.testing', repo)).toBe(1);
     // Head consumed: nothing left to claim.
-    const empty = await queue.claimNext(world.projectA, repo, device, lease.lease.lease_epoch, origin);
+    const empty = await queue.claimNext(
+      world.projectA,
+      repo,
+      device,
+      lease.lease.lease_epoch,
+      origin,
+    );
     expect(empty).toBeNull();
   });
 
@@ -210,25 +260,43 @@ describe('MergeQueueService queue lifecycle', () => {
     const { entryId, epoch } = await claimHead(repo, task, device);
     await expect(
       queue.recordSpeculativeTree(
-        world.projectA, entryId,
+        world.projectA,
+        entryId,
         { speculative_tree_oid: TREE, base_oid: BASE, push_precondition_oid: PRECONDITION },
-        device, epoch + 99, origin,
+        device,
+        epoch + 99,
+        origin,
       ),
     ).rejects.toMatchObject({ code: 'forbidden' });
 
     const recorded = await queue.recordSpeculativeTree(
-      world.projectA, entryId,
+      world.projectA,
+      entryId,
       { speculative_tree_oid: TREE, base_oid: BASE, push_precondition_oid: PRECONDITION },
-      device, epoch, origin,
+      device,
+      epoch,
+      origin,
     );
     expect(recorded.speculative_tree_oid).toBe(TREE);
     expect(recorded.push_precondition_oid).toBe(PRECONDITION);
 
     const runId = await insertRun({
-      repoId: repo, taskId: task, treeOid: TREE, state: 'passed',
-      independence: 'independent', runner: makeId('device'), claimant: device,
+      repoId: repo,
+      taskId: task,
+      treeOid: TREE,
+      state: 'passed',
+      independence: 'independent',
+      runner: makeId('device'),
+      claimant: device,
     });
-    const attached = await queue.attachValidation(world.projectA, entryId, runId, device, epoch, origin);
+    const attached = await queue.attachValidation(
+      world.projectA,
+      entryId,
+      runId,
+      device,
+      epoch,
+      origin,
+    );
     expect(attached.validation_run_id).toBe(runId);
     await expect(
       queue.attachValidation(world.projectA, entryId, makeId('validation'), device, epoch, origin),
@@ -244,9 +312,12 @@ describe('MergeQueueService never-merge-unvalidated gate', () => {
     const task = await makeTask(repo);
     const { entryId, epoch } = await claimHead(repo, task, claimant);
     await queue.recordSpeculativeTree(
-      world.projectA, entryId,
+      world.projectA,
+      entryId,
       { speculative_tree_oid: TREE, base_oid: BASE, push_precondition_oid: PRECONDITION },
-      claimant, epoch, origin,
+      claimant,
+      epoch,
+      origin,
     );
 
     // 1. No validation attached at all.
@@ -256,8 +327,13 @@ describe('MergeQueueService never-merge-unvalidated gate', () => {
 
     // 2. A FAILED independent run for the exact tree.
     const failed = await insertRun({
-      repoId: repo, taskId: task, treeOid: TREE, state: 'failed',
-      independence: 'independent', runner, claimant,
+      repoId: repo,
+      taskId: task,
+      treeOid: TREE,
+      state: 'failed',
+      independence: 'independent',
+      runner,
+      claimant,
     });
     await queue.attachValidation(world.projectA, entryId, failed, claimant, epoch, origin);
     await expect(
@@ -266,8 +342,13 @@ describe('MergeQueueService never-merge-unvalidated gate', () => {
 
     // 3. A PASSED independent run for the WRONG tree.
     const wrongTree = await insertRun({
-      repoId: repo, taskId: task, treeOid: WRONG_TREE, state: 'passed',
-      independence: 'independent', runner, claimant,
+      repoId: repo,
+      taskId: task,
+      treeOid: WRONG_TREE,
+      state: 'passed',
+      independence: 'independent',
+      runner,
+      claimant,
     });
     await queue.attachValidation(world.projectA, entryId, wrongTree, claimant, epoch, origin);
     await expect(
@@ -276,8 +357,13 @@ describe('MergeQueueService never-merge-unvalidated gate', () => {
 
     // 4. A PASSED but SELF run (runner == claimant) for the exact tree.
     const self = await insertRun({
-      repoId: repo, taskId: task, treeOid: TREE, state: 'passed',
-      independence: 'self', runner: claimant, claimant,
+      repoId: repo,
+      taskId: task,
+      treeOid: TREE,
+      state: 'passed',
+      independence: 'self',
+      runner: claimant,
+      claimant,
     });
     await queue.attachValidation(world.projectA, entryId, self, claimant, epoch, origin);
     await expect(
@@ -288,8 +374,13 @@ describe('MergeQueueService never-merge-unvalidated gate', () => {
 
     // 5. A PASSED INDEPENDENT run (runner != claimant) for the EXACT tree.
     const good = await insertRun({
-      repoId: repo, taskId: task, treeOid: TREE, state: 'passed',
-      independence: 'independent', runner, claimant,
+      repoId: repo,
+      taskId: task,
+      treeOid: TREE,
+      state: 'passed',
+      independence: 'independent',
+      runner,
+      claimant,
     });
     await queue.attachValidation(world.projectA, entryId, good, claimant, epoch, origin);
     const landed = await queue.advance(world.projectA, entryId, MERGED, claimant, epoch, origin);
@@ -314,14 +405,23 @@ describe('MergeQueueService executor failover', () => {
     const claimed = await queue.claimNext(world.projectA, repo, dead, epochA, origin);
     expect(claimed?.id).toBe(entry.id);
     await queue.recordSpeculativeTree(
-      world.projectA, entry.id,
+      world.projectA,
+      entry.id,
       { speculative_tree_oid: TREE, base_oid: BASE, push_precondition_oid: PRECONDITION },
-      dead, epochA, origin,
+      dead,
+      epochA,
+      origin,
     );
 
     // The executor dies; its lease lapses past grace.
     await sleep(600);
-    const leaseB = await queue.acquireExecutorLease(world.projectA, repo, successor, origin, 60_000);
+    const leaseB = await queue.acquireExecutorLease(
+      world.projectA,
+      repo,
+      successor,
+      origin,
+      60_000,
+    );
     const epochB = leaseB.lease.lease_epoch;
     expect(epochB).toBeGreaterThan(epochA);
 
@@ -345,8 +445,13 @@ describe('MergeQueueService executor failover', () => {
     ).rejects.toBeInstanceOf(MergeQueueError);
 
     const runId = await insertRun({
-      repoId: repo, taskId: task, treeOid: TREE, state: 'passed',
-      independence: 'independent', runner: successor, claimant: dead,
+      repoId: repo,
+      taskId: task,
+      treeOid: TREE,
+      state: 'passed',
+      independence: 'independent',
+      runner: successor,
+      claimant: dead,
     });
     await queue.attachValidation(world.projectA, entry.id, runId, successor, epochB, origin);
     const landed = await queue.advance(world.projectA, entry.id, MERGED, successor, epochB, origin);
@@ -378,18 +483,30 @@ describe('MergeQueueService eject + requeue', () => {
     const epoch = lease.lease.lease_epoch;
     await queue.claimNext(world.projectA, repo, device, epoch, origin);
     await queue.recordSpeculativeTree(
-      world.projectA, e1.id,
+      world.projectA,
+      e1.id,
       { speculative_tree_oid: TREE, base_oid: BASE, push_precondition_oid: PRECONDITION },
-      device, epoch, origin,
+      device,
+      epoch,
+      origin,
     );
 
-    const ejected = await queue.eject(world.projectA, e1.id, 'validation failed', device, epoch, origin);
+    const ejected = await queue.eject(
+      world.projectA,
+      e1.id,
+      'validation failed',
+      device,
+      epoch,
+      origin,
+    );
     expect(ejected.state).toBe('ejected');
     expect(ejected.ejected_reason).toBe('validation failed');
     expect(await eventCount('merge.ejected', repo)).toBe(1);
 
     // A queued entry cannot be requeued.
-    await expect(queue.requeue(world.projectA, e2.id, origin)).rejects.toMatchObject({ code: 'invalid_transition' });
+    await expect(queue.requeue(world.projectA, e2.id, origin)).rejects.toMatchObject({
+      code: 'invalid_transition',
+    });
 
     const requeued = await queue.requeue(world.projectA, e1.id, origin);
     expect(requeued.state).toBe('queued');

@@ -132,10 +132,19 @@ describe('OverlapEngine symbol overlap (L1)', () => {
   it('does not warn when tasks touch different symbols', async () => {
     const { registry, overlap } = harness();
     const dir = branchRepo(
-      { 'src/lib.ts': 'export function foo(): number { return 1; }\nexport function bar(): number { return 2; }\n' },
       {
-        taskA: { 'src/lib.ts': 'export function foo(): number { return 9; }\nexport function bar(): number { return 2; }\n' },
-        taskB: { 'src/lib.ts': 'export function foo(): number { return 1; }\nexport function bar(): number { return 8; }\n' },
+        'src/lib.ts':
+          'export function foo(): number { return 1; }\nexport function bar(): number { return 2; }\n',
+      },
+      {
+        taskA: {
+          'src/lib.ts':
+            'export function foo(): number { return 9; }\nexport function bar(): number { return 2; }\n',
+        },
+        taskB: {
+          'src/lib.ts':
+            'export function foo(): number { return 1; }\nexport function bar(): number { return 8; }\n',
+        },
       },
     );
     const repo = await registry.register(dir);
@@ -181,8 +190,13 @@ describe('OverlapEngine signature impact (L2 name-based)', () => {
   it('surfaces call sites and the affected task when a signature changes', async () => {
     const { registry, overlap, events } = harness();
     const dir = branchRepo(BASE, {
-      taskA: { 'src/lib.ts': 'export function getUser(id: number): string { return String(id); }\n' },
-      taskB: { 'src/caller.ts': "import { getUser } from './lib';\nexport function run(): string { return getUser('y'); }\n" },
+      taskA: {
+        'src/lib.ts': 'export function getUser(id: number): string { return String(id); }\n',
+      },
+      taskB: {
+        'src/caller.ts':
+          "import { getUser } from './lib';\nexport function run(): string { return getUser('y'); }\n",
+      },
     });
     const repo = await registry.register(dir);
     const result = await overlap.sweep(repo.repo_id, [
@@ -196,7 +210,9 @@ describe('OverlapEngine signature impact (L2 name-based)', () => {
     expect(impact?.old_signature).toBe('getUser(id: string): string');
     expect(impact?.new_signature).toBe('getUser(id: number): string');
     expect(impact?.precision).toBe('name_based');
-    expect(impact?.callers.some((c) => c.file_path === 'src/caller.ts' && c.from_symbol === 'run')).toBe(true);
+    expect(
+      impact?.callers.some((c) => c.file_path === 'src/caller.ts' && c.from_symbol === 'run'),
+    ).toBe(true);
     expect(impact?.affected_task_ids).toContain('tB');
     expect(impact?.severity).toBe('warning');
 
@@ -207,7 +223,9 @@ describe('OverlapEngine signature impact (L2 name-based)', () => {
   it('labels an impact info when no other task touches the callers', async () => {
     const { registry, overlap } = harness();
     const dir = branchRepo(BASE, {
-      taskA: { 'src/lib.ts': 'export function getUser(id: number): string { return String(id); }\n' },
+      taskA: {
+        'src/lib.ts': 'export function getUser(id: number): string { return String(id); }\n',
+      },
     });
     const repo = await registry.register(dir);
     const result = await overlap.sweep(repo.repo_id, [{ taskId: 'tA', branch: 'taskA' }]);

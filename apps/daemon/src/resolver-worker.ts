@@ -37,7 +37,16 @@ export interface Reference {
   is_write: boolean;
 }
 
-const IGNORE = new Set(['node_modules', 'dist', 'build', 'out', 'coverage', '.git', '.next', 'vendor']);
+const IGNORE = new Set([
+  'node_modules',
+  'dist',
+  'build',
+  'out',
+  'coverage',
+  '.git',
+  '.next',
+  'vendor',
+]);
 const SOURCE_RE = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
 
 const services = new Map<string, ts.LanguageService>();
@@ -194,7 +203,13 @@ function handleResolve(req: ResolveRequest): void {
     const abs = join(req.repoRoot, req.filePath);
     const sf = program?.getSourceFile(abs) ?? program?.getSourceFile(req.filePath);
     if (!program || !sf) {
-      send({ id: req.id, ok: true, references: [], precision: 'exact', note: 'file_not_in_program' });
+      send({
+        id: req.id,
+        ok: true,
+        references: [],
+        precision: 'exact',
+        note: 'file_not_in_program',
+      });
       return;
     }
     const position = findPosition(sf, req.name, req.container ?? '', req.kind, req.startLine);
@@ -209,9 +224,7 @@ function handleResolve(req: ResolveRequest): void {
         const kind = String(group.definition.kind);
         for (const ref of group.references) {
           const refSf = program.getSourceFile(ref.fileName);
-          const line = refSf
-            ? refSf.getLineAndCharacterOfPosition(ref.textSpan.start).line + 1
-            : 0;
+          const line = refSf ? refSf.getLineAndCharacterOfPosition(ref.textSpan.start).line + 1 : 0;
           references.push({
             file_path: relative(req.repoRoot, ref.fileName).replace(/\\/g, '/'),
             line,

@@ -164,7 +164,8 @@ export class ResolverClient {
   }
 
   private request<T>(payload: Record<string, unknown>, map: (msg: WorkerMessage) => T): Promise<T> {
-    if (!this.config.enabled) return Promise.reject(new ResolverError('disabled', 'resolver disabled'));
+    if (!this.config.enabled)
+      return Promise.reject(new ResolverError('disabled', 'resolver disabled'));
     if (this.stopped) return Promise.reject(new ResolverError('crashed', 'resolver stopped'));
     return this.ensureChild().then(
       (child) =>
@@ -172,7 +173,12 @@ export class ResolverClient {
           const id = this.nextId++;
           const timer = setTimeout(() => {
             this.pending.delete(id);
-            reject(new ResolverError('timeout', `resolver request timed out after ${this.config.requestTimeoutMs}ms`));
+            reject(
+              new ResolverError(
+                'timeout',
+                `resolver request timed out after ${this.config.requestTimeoutMs}ms`,
+              ),
+            );
           }, this.config.requestTimeoutMs);
           timer.unref?.();
           this.pending.set(id, {

@@ -27,7 +27,10 @@ export function poolExecutor(pool: Pool): PgExecutor {
 }
 
 /** Run `fn` inside a transaction on a dedicated client; rolls back on error. */
-export async function withTransaction<T>(pool: Pool, fn: (client: Client) => Promise<T>): Promise<T> {
+export async function withTransaction<T>(
+  pool: Pool,
+  fn: (client: Client) => Promise<T>,
+): Promise<T> {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');

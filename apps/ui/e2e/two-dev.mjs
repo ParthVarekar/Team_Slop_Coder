@@ -84,7 +84,8 @@ async function teardown() {
 async function main() {
   assert.ok(existsSync(serverDist), 'server dist missing — run pnpm build first');
 
-  const EmbeddedPostgres = (await import(pathToFileURL(req.resolve('embedded-postgres')).href)).default;
+  const EmbeddedPostgres = (await import(pathToFileURL(req.resolve('embedded-postgres')).href))
+    .default;
   const { createServer } = await import(pathToFileURL(serverDist).href);
   const { makeId, ulid, PROTOCOL_VERSION } = await import(
     pathToFileURL(join(root, 'packages', 'protocol', 'dist', 'index.js')).href
@@ -110,7 +111,14 @@ async function main() {
   const port = await freePort();
   const adminSecret = 'twodev-admin-secret';
   server = await createServer(
-    { dataDir: join(temp, 'server'), host: '127.0.0.1', port, databaseUrl, logLevel: 'fatal', corsOrigin: '*' },
+    {
+      dataDir: join(temp, 'server'),
+      host: '127.0.0.1',
+      port,
+      databaseUrl,
+      logLevel: 'fatal',
+      corsOrigin: '*',
+    },
     { adminSecret, onShutdown: () => {} },
   );
   const baseUrl = await server.listen();
@@ -128,19 +136,65 @@ async function main() {
   const deviceMarcus = makeId('device');
   const sesPriya = makeId('session');
   const sesMarcus = makeId('session');
-  await pool.query('INSERT INTO organizations (id, name, slug) VALUES ($1,$2,$3)', [orgId, 'TwoDev Org', `org-${orgId}`]);
-  await pool.query('INSERT INTO teams (id, org_id, name, slug) VALUES ($1,$2,$3,$4)', [teamId, orgId, 'TwoDev Team', `team-${teamId}`]);
-  await pool.query('INSERT INTO projects (id, team_id, name, slug) VALUES ($1,$2,$3,$4)', [projectId, teamId, 'Shared Repo Project', `proj-${projectId}`]);
-  await pool.query('INSERT INTO users (id, org_id, email, display_name) VALUES ($1,$2,$3,$4)', [priya, orgId, 'priya@twodev.local', 'Priya']);
-  await pool.query('INSERT INTO users (id, org_id, email, display_name) VALUES ($1,$2,$3,$4)', [marcus, orgId, 'marcus@twodev.local', 'Marcus']);
-  await pool.query('INSERT INTO project_members (project_id, user_id, role) VALUES ($1,$2,$3)', [projectId, priya, 'member']);
-  await pool.query('INSERT INTO project_members (project_id, user_id, role) VALUES ($1,$2,$3)', [projectId, marcus, 'member']);
-  await pool.query('INSERT INTO devices (id, user_id, hostname, os) VALUES ($1,$2,$3,$4)', [devicePriya, priya, 'priya-host', 'linux']);
-  await pool.query('INSERT INTO devices (id, user_id, hostname, os) VALUES ($1,$2,$3,$4)', [deviceMarcus, marcus, 'marcus-host', 'darwin']);
+  await pool.query('INSERT INTO organizations (id, name, slug) VALUES ($1,$2,$3)', [
+    orgId,
+    'TwoDev Org',
+    `org-${orgId}`,
+  ]);
+  await pool.query('INSERT INTO teams (id, org_id, name, slug) VALUES ($1,$2,$3,$4)', [
+    teamId,
+    orgId,
+    'TwoDev Team',
+    `team-${teamId}`,
+  ]);
+  await pool.query('INSERT INTO projects (id, team_id, name, slug) VALUES ($1,$2,$3,$4)', [
+    projectId,
+    teamId,
+    'Shared Repo Project',
+    `proj-${projectId}`,
+  ]);
+  await pool.query('INSERT INTO users (id, org_id, email, display_name) VALUES ($1,$2,$3,$4)', [
+    priya,
+    orgId,
+    'priya@twodev.local',
+    'Priya',
+  ]);
+  await pool.query('INSERT INTO users (id, org_id, email, display_name) VALUES ($1,$2,$3,$4)', [
+    marcus,
+    orgId,
+    'marcus@twodev.local',
+    'Marcus',
+  ]);
+  await pool.query('INSERT INTO project_members (project_id, user_id, role) VALUES ($1,$2,$3)', [
+    projectId,
+    priya,
+    'member',
+  ]);
+  await pool.query('INSERT INTO project_members (project_id, user_id, role) VALUES ($1,$2,$3)', [
+    projectId,
+    marcus,
+    'member',
+  ]);
+  await pool.query('INSERT INTO devices (id, user_id, hostname, os) VALUES ($1,$2,$3,$4)', [
+    devicePriya,
+    priya,
+    'priya-host',
+    'linux',
+  ]);
+  await pool.query('INSERT INTO devices (id, user_id, hostname, os) VALUES ($1,$2,$3,$4)', [
+    deviceMarcus,
+    marcus,
+    'marcus-host',
+    'darwin',
+  ]);
 
   const admin = { authorization: `Bearer ${adminSecret}`, 'content-type': 'application/json' };
   const ingest = (events) =>
-    fetch(`${baseUrl}/v1/ingest`, { method: 'POST', headers: admin, body: JSON.stringify({ events }) });
+    fetch(`${baseUrl}/v1/ingest`, {
+      method: 'POST',
+      headers: admin,
+      body: JSON.stringify({ events }),
+    });
   const event = (type, actor, extra = {}) => ({
     v: PROTOCOL_VERSION,
     event_id: ulid(),
@@ -160,9 +214,12 @@ async function main() {
       body: JSON.stringify({ projectId, ...body }),
     });
   const get = (path, token) =>
-    fetch(`${baseUrl}${path}${path.includes('?') ? '&' : '?'}projectId=${encodeURIComponent(projectId)}`, {
-      headers: { authorization: `Bearer ${token}` },
-    });
+    fetch(
+      `${baseUrl}${path}${path.includes('?') ? '&' : '?'}projectId=${encodeURIComponent(projectId)}`,
+      {
+        headers: { authorization: `Bearer ${token}` },
+      },
+    );
   const issueToken = async (userId) => {
     const res = await fetch(`${baseUrl}/v1/admin/tokens`, {
       method: 'POST',
@@ -175,13 +232,28 @@ async function main() {
   const priyaToken = await issueToken(priya);
   const marcusToken = await issueToken(marcus);
 
-  const priyaAgent = { user_id: priya, agent: { provider: 'Claude Code', model: 'opus', adapter: 'hooks@1.4.0' } };
-  const marcusAgent = { user_id: marcus, agent: { provider: 'Codex', model: 'gpt-5', adapter: 'hooks@1.4.0' } };
+  const priyaAgent = {
+    user_id: priya,
+    agent: { provider: 'Claude Code', model: 'opus', adapter: 'hooks@1.4.0' },
+  };
+  const marcusAgent = {
+    user_id: marcus,
+    agent: { provider: 'Codex', model: 'gpt-5', adapter: 'hooks@1.4.0' },
+  };
 
   // --- Phase 1: shared visibility (two providers, one repo) ------------------
   const seeded = await ingest([
-    event('session.started', priyaAgent, { session_id: sesPriya, repo_id: repoId, payload: { cwd: '/repo', prompt_summary: 'Implement the team stream', fidelity: 'high' } }),
-    event('session.started', marcusAgent, { session_id: sesMarcus, repo_id: repoId, device_id: deviceMarcus, payload: { cwd: '/repo', prompt_summary: 'Fix the parser', fidelity: 'high' } }),
+    event('session.started', priyaAgent, {
+      session_id: sesPriya,
+      repo_id: repoId,
+      payload: { cwd: '/repo', prompt_summary: 'Implement the team stream', fidelity: 'high' },
+    }),
+    event('session.started', marcusAgent, {
+      session_id: sesMarcus,
+      repo_id: repoId,
+      device_id: deviceMarcus,
+      payload: { cwd: '/repo', prompt_summary: 'Fix the parser', fidelity: 'high' },
+    }),
   ]);
   assert.equal(seeded.status, 202);
   const seededBody = await seeded.json();
@@ -218,29 +290,51 @@ async function main() {
   await page.getByText('Codex for Marcus').waitFor();
   // A live event from Marcus reaches Priya's UI without a reload.
   const live = await ingest([
-    event('session.status', marcusAgent, { session_id: sesMarcus, device_id: deviceMarcus, payload: { status: 'idle' } }),
+    event('session.status', marcusAgent, {
+      session_id: sesMarcus,
+      device_id: deviceMarcus,
+      payload: { status: 'idle' },
+    }),
   ]);
   assert.equal(live.status, 202);
-  await page.waitForFunction(() => document.body.innerText.includes('Status → idle'), null, { polling: 50, timeout: 10_000 });
+  await page.waitForFunction(() => document.body.innerText.includes('Status → idle'), null, {
+    polling: 50,
+    timeout: 10_000,
+  });
   console.log('✓ shared visibility: both developers visible + live cross-developer SSE fan-out');
 
   // --- Phase 2: no double-claims (atomic CAS, exactly one winner) ------------
   const created = await post('/v1/tasks', priyaToken, { title: 'Shared integration task', repoId });
   assert.equal(created.status, 201);
   const sharedTask = (await created.json()).task;
-  const ready = await post(`/v1/tasks/${sharedTask.id}/transition`, priyaToken, { baseVersion: 0, to: 'ready' });
+  const ready = await post(`/v1/tasks/${sharedTask.id}/transition`, priyaToken, {
+    baseVersion: 0,
+    to: 'ready',
+  });
   assert.equal(ready.status, 200);
   const readyVersion = (await ready.json()).task.version;
 
   const [resPriya, resMarcus] = await Promise.all([
-    post(`/v1/tasks/${sharedTask.id}/claim`, priyaToken, { baseVersion: readyVersion, claimant: priyaAgent, deviceId: devicePriya }),
-    post(`/v1/tasks/${sharedTask.id}/claim`, marcusToken, { baseVersion: readyVersion, claimant: marcusAgent, deviceId: deviceMarcus }),
+    post(`/v1/tasks/${sharedTask.id}/claim`, priyaToken, {
+      baseVersion: readyVersion,
+      claimant: priyaAgent,
+      deviceId: devicePriya,
+    }),
+    post(`/v1/tasks/${sharedTask.id}/claim`, marcusToken, {
+      baseVersion: readyVersion,
+      claimant: marcusAgent,
+      deviceId: deviceMarcus,
+    }),
   ]);
   const bodyPriya = await resPriya.json();
   const bodyMarcus = await resMarcus.json();
   const winners = [bodyPriya, bodyMarcus].filter((b) => b.ok);
   const losers = [bodyPriya, bodyMarcus].filter((b) => !b.ok);
-  assert.equal(winners.length, 1, `expected exactly one claim winner: ${JSON.stringify([bodyPriya, bodyMarcus])}`);
+  assert.equal(
+    winners.length,
+    1,
+    `expected exactly one claim winner: ${JSON.stringify([bodyPriya, bodyMarcus])}`,
+  );
   assert.equal(losers.length, 1);
   assert.ok(losers[0].winner_claimant, 'loser must record the winner');
   assert.match(losers[0].reason, /claimed/);
@@ -250,14 +344,26 @@ async function main() {
   // The winning state is visible to the team in the Tasks pane.
   await page.getByRole('button', { name: 'Tasks', exact: true }).click();
   await page.getByRole('button', { name: 'Refresh lists' }).click();
-  const taskRow = page.getByRole('button', { name: /Shared integration task/ }).filter({ hasText: 'claimed' });
+  const taskRow = page
+    .getByRole('button', { name: /Shared integration task/ })
+    .filter({ hasText: 'claimed' });
   await taskRow.waitFor();
-  assert.ok((await taskRow.innerText()).toLowerCase().includes('claimed'), 'task row should show claimed');
-  console.log('✓ no double-claims: concurrent claims → exactly one winner, loser rejected, state shared in UI');
+  assert.ok(
+    (await taskRow.innerText()).toLowerCase().includes('claimed'),
+    'task row should show claimed',
+  );
+  console.log(
+    '✓ no double-claims: concurrent claims → exactly one winner, loser rejected, state shared in UI',
+  );
 
   // --- Phase 3: file-conflict warning surfaced before merge ------------------
   const mkTask = async (title, branch, token) => {
-    const res = await post('/v1/tasks', token, { title, repoId, branch, expectedFiles: ['src/shared.ts'] });
+    const res = await post('/v1/tasks', token, {
+      title,
+      repoId,
+      branch,
+      expectedFiles: ['src/shared.ts'],
+    });
     assert.equal(res.status, 201);
     return (await res.json()).task.id;
   };
@@ -279,7 +385,9 @@ async function main() {
       repo_id: repoId,
       branch_a: 'marcus/shared-ts',
       branch_b: 'priya/shared-ts',
-      evidence: [{ kind: 'diff-overlap', paths: ['src/shared.ts'], detector_device_id: deviceMarcus }],
+      evidence: [
+        { kind: 'diff-overlap', paths: ['src/shared.ts'], detector_device_id: deviceMarcus },
+      ],
     },
   });
   const conflictRes = await ingest([conflictEvent]);
@@ -297,16 +405,27 @@ async function main() {
   assert.ok(overlap.paths.includes('src/shared.ts'));
   assert.deepEqual([...overlap.task_ids].sort(), [taskA, taskB].sort());
   // The warning is visible to the whole team in the shared activity stream.
-  await page.waitForFunction(() => document.body.innerText.includes('conflict.detected'), null, { polling: 50, timeout: 10_000 });
-  console.log('✓ file-conflict warning before merge: canonical open card + shared stream visibility');
+  await page.waitForFunction(() => document.body.innerText.includes('conflict.detected'), null, {
+    polling: 50,
+    timeout: 10_000,
+  });
+  console.log(
+    '✓ file-conflict warning before merge: canonical open card + shared stream visibility',
+  );
 
   // --- Phase 4: completion requires passing validation evidence --------------
-  const evidenceCreated = await post('/v1/tasks', priyaToken, { title: 'Evidence-gated task', repoId });
+  const evidenceCreated = await post('/v1/tasks', priyaToken, {
+    title: 'Evidence-gated task',
+    repoId,
+  });
   assert.equal(evidenceCreated.status, 201);
   const evidenceTask = (await evidenceCreated.json()).task;
   let v = evidenceTask.version;
   for (const to of ['ready', 'claimed', 'in_progress', 'review', 'validation']) {
-    const res = await post(`/v1/tasks/${evidenceTask.id}/transition`, priyaToken, { baseVersion: v, to });
+    const res = await post(`/v1/tasks/${evidenceTask.id}/transition`, priyaToken, {
+      baseVersion: v,
+      to,
+    });
     const body = await res.json();
     assert.equal(res.status, 200, `transition ${to} failed: ${JSON.stringify(body)}`);
     v = body.task.version;
@@ -314,12 +433,21 @@ async function main() {
 
   await page.getByRole('button', { name: 'Tasks', exact: true }).click();
   await page.getByRole('button', { name: 'Refresh lists' }).click();
-  await page.getByRole('button', { name: /Evidence-gated task/ }).filter({ hasText: 'validation' }).click();
+  await page
+    .getByRole('button', { name: /Evidence-gated task/ })
+    .filter({ hasText: 'validation' })
+    .click();
   await page.locator('aside').getByText('validation', { exact: true }).waitFor();
   // COMPLETED without evidence is refused; the UI surfaces the server's reason.
   await page.locator('aside').getByRole('button', { name: 'completed', exact: true }).click();
-  await page.locator('aside').getByText(/cannot complete without a passing validation run/).waitFor();
-  const refused = await post(`/v1/tasks/${evidenceTask.id}/transition`, priyaToken, { baseVersion: v, to: 'completed' });
+  await page
+    .locator('aside')
+    .getByText(/cannot complete without a passing validation run/)
+    .waitFor();
+  const refused = await post(`/v1/tasks/${evidenceTask.id}/transition`, priyaToken, {
+    baseVersion: v,
+    to: 'completed',
+  });
   assert.equal(refused.status, 422);
   assert.equal((await refused.json()).error, 'evidence_required');
   console.log('✓ completion refused without evidence (UI error + HTTP 422 evidence_required)');
@@ -327,15 +455,26 @@ async function main() {
   // Ship a passing validation run (daemon evidence), then completion succeeds.
   const runId = makeId('validation');
   const evidenceRes = await ingest([
-    event('validation.started', priyaAgent, { repo_id: repoId, task_id: evidenceTask.id, payload: { run_id: runId, trigger: 'task', checks: ['build'], selection: 'full' } }),
-    event('validation.completed', priyaAgent, { repo_id: repoId, task_id: evidenceTask.id, payload: { run_id: runId, state: 'passed', checks: [{ check_id: 'build', exit_code: 0 }] } }),
+    event('validation.started', priyaAgent, {
+      repo_id: repoId,
+      task_id: evidenceTask.id,
+      payload: { run_id: runId, trigger: 'task', checks: ['build'], selection: 'full' },
+    }),
+    event('validation.completed', priyaAgent, {
+      repo_id: repoId,
+      task_id: evidenceTask.id,
+      payload: { run_id: runId, state: 'passed', checks: [{ check_id: 'build', exit_code: 0 }] },
+    }),
   ]);
   assert.equal(evidenceRes.status, 202);
   const evidenceBody = await evidenceRes.json();
   assert.equal(evidenceBody.accepted.length, 2, JSON.stringify(evidenceBody.rejected));
   const runsRes = await get(`/v1/validation/runs?taskId=${evidenceTask.id}`, priyaToken);
   const runs = (await runsRes.json()).runs;
-  assert.ok(runs.some((r) => r.state === 'passed'), 'expected a passing validation run');
+  assert.ok(
+    runs.some((r) => r.state === 'passed'),
+    'expected a passing validation run',
+  );
 
   await page.locator('aside').getByRole('button', { name: 'completed', exact: true }).click();
   // Wait for the post-completion 'ready' button: getByText('completed') would also
@@ -352,11 +491,20 @@ async function main() {
   for (let i = 0; i < 15; i++) {
     const marker = `TeamProbe_${i}`;
     const t0 = performance.now();
-    const res = await ingest([event('tool.pre', priyaAgent, { session_id: perfSession, payload: { tool_name: marker } })]);
+    const res = await ingest([
+      event('tool.pre', priyaAgent, { session_id: perfSession, payload: { tool_name: marker } }),
+    ]);
     assert.equal(res.status, 202);
     const ingested = await res.json();
-    assert.equal(ingested.accepted.length, 1, `probe rejected: ${JSON.stringify(ingested.rejected)}`);
-    await page.waitForFunction((m) => document.body.innerText.includes(m), marker, { polling: 16, timeout: 5000 });
+    assert.equal(
+      ingested.accepted.length,
+      1,
+      `probe rejected: ${JSON.stringify(ingested.rejected)}`,
+    );
+    await page.waitForFunction((m) => document.body.innerText.includes(m), marker, {
+      polling: 16,
+      timeout: 5000,
+    });
     uiLatencies.push(performance.now() - t0);
   }
   const uiP95 = percentile(uiLatencies, 0.95);

@@ -179,9 +179,9 @@ describe('intersection (overlap math)', () => {
   });
 
   it('commutativity + subset laws (property)', () => {
-    const arbSet = fc.array(fc.stringMatching(/^[a-z0-9]{1,4}$/), { maxLength: 20 }).map(
-      (arr) => new Set(arr),
-    );
+    const arbSet = fc
+      .array(fc.stringMatching(/^[a-z0-9]{1,4}$/), { maxLength: 20 })
+      .map((arr) => new Set(arr));
     fc.assert(
       fc.property(arbSet, arbSet, (a, b) => {
         const ab = intersection(a, b);
@@ -202,7 +202,9 @@ describe('intersection (overlap math)', () => {
     const mod = diffSymbols('a.ts', base, branch)[0];
     expect(mod).toBeDefined();
     if (mod) {
-      expect(modificationIdentity(mod)).toBe(symbolIdentity('a.ts', mod.kind, mod.container, mod.name));
+      expect(modificationIdentity(mod)).toBe(
+        symbolIdentity('a.ts', mod.kind, mod.container, mod.name),
+      );
     }
   });
 });

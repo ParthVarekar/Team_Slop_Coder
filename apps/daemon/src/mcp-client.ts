@@ -34,7 +34,11 @@ export class HttpMcpBackend implements McpBackend {
     this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
-  private async call(method: string, path: string, body?: Record<string, unknown>): Promise<Record<string, unknown>> {
+  private async call(
+    method: string,
+    path: string,
+    body?: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
     const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
       method,
       headers: {
@@ -45,17 +49,24 @@ export class HttpMcpBackend implements McpBackend {
     });
     const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
     if (!res.ok) {
-      const message = typeof json.message === 'string' ? json.message : `${method} ${path} failed: ${res.status}`;
+      const message =
+        typeof json.message === 'string' ? json.message : `${method} ${path} failed: ${res.status}`;
       throw new Error(message);
     }
     return json;
   }
 
   async getTask(taskId: string): Promise<McpGetTaskResult> {
-    return (await this.call('GET', `/v1/mcp/task/${encodeURIComponent(taskId)}`)) as unknown as McpGetTaskResult;
+    return (await this.call(
+      'GET',
+      `/v1/mcp/task/${encodeURIComponent(taskId)}`,
+    )) as unknown as McpGetTaskResult;
   }
 
-  async claimTask(taskId: string, opts: { baseVersion?: number; provisional?: boolean }): Promise<McpClaimResult> {
+  async claimTask(
+    taskId: string,
+    opts: { baseVersion?: number; provisional?: boolean },
+  ): Promise<McpClaimResult> {
     const json = await this.call('POST', '/v1/mcp/claim', {
       task_id: taskId,
       ...(opts.baseVersion != null ? { base_version: opts.baseVersion } : {}),
@@ -64,7 +75,11 @@ export class HttpMcpBackend implements McpBackend {
     return json as unknown as McpClaimResult;
   }
 
-  async reportProgress(taskId: string, note: string, opts: { percent?: number }): Promise<McpProgressResult> {
+  async reportProgress(
+    taskId: string,
+    note: string,
+    opts: { percent?: number },
+  ): Promise<McpProgressResult> {
     const json = await this.call('POST', '/v1/mcp/progress', {
       task_id: taskId,
       note,
@@ -73,7 +88,10 @@ export class HttpMcpBackend implements McpBackend {
     return json as unknown as McpProgressResult;
   }
 
-  async getConcurrentChanges(taskId: string, opts: { budgetBytes?: number }): Promise<ContextPayload> {
+  async getConcurrentChanges(
+    taskId: string,
+    opts: { budgetBytes?: number },
+  ): Promise<ContextPayload> {
     const query = new URLSearchParams({ task_id: taskId });
     if (opts.budgetBytes != null) query.set('budget_bytes', String(opts.budgetBytes));
     return (await this.call('GET', `/v1/context?${query.toString()}`)) as unknown as ContextPayload;
@@ -133,7 +151,9 @@ export async function subscribePush(
     if (existing) clearTimeout(existing);
     const timer = setTimeout(() => {
       timers.delete(taskId);
-      void mcp.pushContext(taskId).catch((err) => process.stderr.write(`weft mcp push failed: ${String(err)}\n`));
+      void mcp
+        .pushContext(taskId)
+        .catch((err) => process.stderr.write(`weft mcp push failed: ${String(err)}\n`));
     }, PUSH_DEBOUNCE_MS);
     timer.unref?.();
     timers.set(taskId, timer);
@@ -180,7 +200,14 @@ export async function subscribePush(
     await new Promise((resolve) => {
       const t = setTimeout(resolve, 1000);
       t.unref?.();
-      signal.addEventListener('abort', () => { clearTimeout(t); resolve(undefined); }, { once: true });
+      signal.addEventListener(
+        'abort',
+        () => {
+          clearTimeout(t);
+          resolve(undefined);
+        },
+        { once: true },
+      );
     });
   }
   for (const timer of timers.values()) clearTimeout(timer);

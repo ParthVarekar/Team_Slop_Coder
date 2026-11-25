@@ -126,7 +126,9 @@ describe('HealthService regression attribution', () => {
       change(culprit, 'src/broken.ts,src/broken.test.ts', 2, 'task-culprit'),
       change('2'.repeat(40), 'src/other.ts', 3),
     ];
-    const failingChecks = [{ check_id: 'test-broken', paths: ['src/broken.ts', 'src/broken.test.ts'] }];
+    const failingChecks = [
+      { check_id: 'test-broken', paths: ['src/broken.ts', 'src/broken.test.ts'] },
+    ];
     const reg = await health.recordRegression(
       world.projectA,
       { repo_id: repo, baseline_id: base, failing_checks: failingChecks, changes },
@@ -222,7 +224,11 @@ describe('HealthService project isolation', () => {
     const base = await baseline(repo);
     const reg = await health.recordRegression(
       world.projectA,
-      { repo_id: repo, baseline_id: base, failing_checks: [{ check_id: 't', paths: ['src/x.ts'] }] },
+      {
+        repo_id: repo,
+        baseline_id: base,
+        failing_checks: [{ check_id: 't', paths: ['src/x.ts'] }],
+      },
       origin,
     );
     expect(await health.getRegression(world.projectB, reg.id)).toBeUndefined();
@@ -232,7 +238,11 @@ describe('HealthService project isolation', () => {
     await expect(
       health.recordRegression(
         world.projectB,
-        { repo_id: repo, baseline_id: base, failing_checks: [{ check_id: 't', paths: ['src/x.ts'] }] },
+        {
+          repo_id: repo,
+          baseline_id: base,
+          failing_checks: [{ check_id: 't', paths: ['src/x.ts'] }],
+        },
         { actor: { user_id: world.adminUser, agent: null }, deviceId: world.deviceId },
       ),
     ).rejects.toMatchObject({ code: 'not_found' });

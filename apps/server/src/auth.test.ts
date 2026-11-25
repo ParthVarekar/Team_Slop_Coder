@@ -95,7 +95,9 @@ async function issue(
 
 async function setMemberRole(projectId: string, userId: string, role: Role): Promise<void> {
   await pool.query('UPDATE project_members SET role = $3 WHERE project_id = $1 AND user_id = $2', [
-    projectId, userId, role,
+    projectId,
+    userId,
+    role,
   ]);
 }
 
@@ -121,7 +123,9 @@ describe('server auth/RBAC penetration (real Postgres 16)', () => {
     // projectId is implied by the token when omitted
     const implied = await call('GET', '/v1/events', tok.token);
     expect(implied.statusCode).toBe(200);
-    expect(implied.json().events.every((e: { project_id: string }) => e.project_id === world.projectA)).toBe(true);
+    expect(
+      implied.json().events.every((e: { project_id: string }) => e.project_id === world.projectA),
+    ).toBe(true);
   });
 
   it('viewer token can read but not ingest (scope enforcement)', async () => {
@@ -153,11 +157,15 @@ describe('server auth/RBAC penetration (real Postgres 16)', () => {
   it('member token cannot reach management routes (scope)', async () => {
     const tok = await issue(world.projectA, 'member', { userId: world.memberUser });
     const res = await call('POST', '/v1/admin/tokens', tok.token, {
-      projectId: world.projectA, role: 'viewer', userId: world.viewerUser,
+      projectId: world.projectA,
+      role: 'viewer',
+      userId: world.viewerUser,
     });
     expect(res.statusCode).toBe(403);
     expect(res.json().reason).toBe('scope');
-    expect((await call('GET', `/v1/admin/audit?projectId=${world.projectA}`, tok.token)).statusCode).toBe(403);
+    expect(
+      (await call('GET', `/v1/admin/audit?projectId=${world.projectA}`, tok.token)).statusCode,
+    ).toBe(403);
   });
 
   it('rejects unknown and absent credentials with 401', async () => {
@@ -169,20 +177,30 @@ describe('server auth/RBAC penetration (real Postgres 16)', () => {
 
   it('denies a revoked token', async () => {
     const tok = await issue(world.projectA, 'member', { userId: world.memberUser });
-    const rev = await call('POST', `/v1/admin/tokens/${tok.id}/revoke?projectId=${world.projectA}`, adminSecret);
+    const rev = await call(
+      'POST',
+      `/v1/admin/tokens/${tok.id}/revoke?projectId=${world.projectA}`,
+      adminSecret,
+    );
     expect(rev.statusCode).toBe(200);
     const res = await call('GET', '/v1/events', tok.token);
     expect(res.statusCode).toBe(401);
     expect(res.json().reason).toBe('revoked');
     // revocation is idempotent
-    const again = await call('POST', `/v1/admin/tokens/${tok.id}/revoke?projectId=${world.projectA}`, adminSecret);
+    const again = await call(
+      'POST',
+      `/v1/admin/tokens/${tok.id}/revoke?projectId=${world.projectA}`,
+      adminSecret,
+    );
     expect(again.statusCode).toBe(200);
     expect(again.json().alreadyRevoked).toBe(true);
   });
 
   it('denies an expired token', async () => {
     const tok = await issue(world.projectA, 'member', { userId: world.memberUser });
-    await pool.query("UPDATE api_tokens SET expires_at = now() - interval '1 hour' WHERE id = $1", [tok.id]);
+    await pool.query("UPDATE api_tokens SET expires_at = now() - interval '1 hour' WHERE id = $1", [
+      tok.id,
+    ]);
     const res = await call('GET', '/v1/events', tok.token);
     expect(res.statusCode).toBe(401);
     expect(res.json().reason).toBe('expired');
@@ -191,16 +209,18 @@ describe('server auth/RBAC penetration (real Postgres 16)', () => {
   it('denies a token whose principal lost project membership', async () => {
     const tok = await issue(world.projectA, 'member', { userId: world.memberUser });
     await pool.query('DELETE FROM project_members WHERE project_id = $1 AND user_id = $2', [
-      world.projectA, world.memberUser,
+      world.projectA,
+      world.memberUser,
     ]);
     try {
       const res = await call('GET', '/v1/events', tok.token);
       expect(res.statusCode).toBe(401);
       expect(res.json().reason).toBe('membership_revoked');
     } finally {
-      await pool.query('INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, $3)', [
-        world.projectA, world.memberUser, 'member',
-      ]);
+      await pool.query(
+        'INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, $3)',
+        [world.projectA, world.memberUser, 'member'],
+      );
     }
   });
 
@@ -220,7 +240,9 @@ describe('server auth/RBAC penetration (real Postgres 16)', () => {
 
   it('refuses to escalate a token beyond the principal role', async () => {
     const res = await call('POST', '/v1/admin/tokens', adminSecret, {
-      projectId: world.projectA, role: 'admin', userId: world.viewerUser,
+      projectId: world.projectA,
+      role: 'admin',
+      userId: world.viewerUser,
     });
     expect(res.statusCode).toBe(403);
     expect(res.json().error).toBe('escalation');
@@ -239,22 +261,28 @@ describe('server auth/RBAC penetration (real Postgres 16)', () => {
   it('denies a device token when the owner loses membership', async () => {
     const tok = await issue(world.projectA, 'member', { deviceId: world.deviceId });
     await pool.query('DELETE FROM project_members WHERE project_id = $1 AND user_id = $2', [
-      world.projectA, world.memberUser,
+      world.projectA,
+      world.memberUser,
     ]);
     try {
       const res = await call('GET', '/v1/events', tok.token);
       expect(res.statusCode).toBe(401);
       expect(res.json().reason).toBe('membership_revoked');
     } finally {
-      await pool.query('INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, $3)', [
-        world.projectA, world.memberUser, 'member',
-      ]);
+      await pool.query(
+        'INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, $3)',
+        [world.projectA, world.memberUser, 'member'],
+      );
     }
   });
 
   it('records an append-only audit trail for token and auth events', async () => {
     const tok = await issue(world.projectA, 'member', { userId: world.memberUser });
-    await call('POST', `/v1/admin/tokens/${tok.id}/revoke?projectId=${world.projectA}`, adminSecret);
+    await call(
+      'POST',
+      `/v1/admin/tokens/${tok.id}/revoke?projectId=${world.projectA}`,
+      adminSecret,
+    );
     await call('GET', '/v1/events', tok.token); // revoked -> auth.denied
     const audit = await call('GET', `/v1/admin/audit?projectId=${world.projectA}`, adminSecret);
     expect(audit.statusCode).toBe(200);
@@ -287,7 +315,9 @@ describe('server auth/RBAC penetration (real Postgres 16)', () => {
 
   it('manages project members and registers devices via admin routes', async () => {
     const add = await call('POST', '/v1/admin/members', adminSecret, {
-      projectId: world.projectB, userId: world.memberUser, role: 'member',
+      projectId: world.projectB,
+      userId: world.memberUser,
+      role: 'member',
     });
     expect(add.statusCode).toBe(200);
     expect(add.json().after).toBe('member');
@@ -298,7 +328,10 @@ describe('server auth/RBAC penetration (real Postgres 16)', () => {
       ),
     ).toBe(true);
     const dev = await call('POST', '/v1/admin/devices', adminSecret, {
-      projectId: world.projectA, userId: world.memberUser, hostname: 'h2', os: 'win32',
+      projectId: world.projectA,
+      userId: world.memberUser,
+      hostname: 'h2',
+      os: 'win32',
     });
     expect(dev.statusCode).toBe(201);
     expect(dev.json().id).toMatch(/^dev_/);
@@ -306,7 +339,9 @@ describe('server auth/RBAC penetration (real Postgres 16)', () => {
 
   it('rejects token issuance for a non-member principal', async () => {
     const res = await call('POST', '/v1/admin/tokens', adminSecret, {
-      projectId: world.projectB, role: 'member', userId: world.viewerUser,
+      projectId: world.projectB,
+      role: 'member',
+      userId: world.viewerUser,
     });
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toBe('not_a_member');
@@ -314,7 +349,8 @@ describe('server auth/RBAC penetration (real Postgres 16)', () => {
 
   it('requires a principal when issuing a token', async () => {
     const res = await call('POST', '/v1/admin/tokens', adminSecret, {
-      projectId: world.projectA, role: 'member',
+      projectId: world.projectA,
+      role: 'member',
     });
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toBe('principal_required');

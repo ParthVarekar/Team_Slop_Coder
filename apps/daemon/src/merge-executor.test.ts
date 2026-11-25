@@ -136,7 +136,11 @@ async function scenario(opts: ScenarioOptions = {}) {
     const env = draftEvent(source, draft);
     parseEvent(env);
     captured.push(env);
-    if (env.type === 'validation.started' || env.type === 'check.completed' || env.type === 'validation.completed')
+    if (
+      env.type === 'validation.started' ||
+      env.type === 'check.completed' ||
+      env.type === 'validation.completed'
+    )
       toProject.push(env);
     return { accepted: true, event_id: env.event_id };
   };
@@ -167,10 +171,19 @@ async function scenario(opts: ScenarioOptions = {}) {
 
   const origin = { actor, deviceId: executorDevice };
   const client: MergeQueueClient = {
-    acquireLease: (repoId, deviceId, ttlMs) => queue.acquireExecutorLease(projectId, repoId, deviceId, origin, ttlMs),
-    claimNext: (repoId, deviceId, epoch) => queue.claimNext(projectId, repoId, deviceId, epoch, origin),
+    acquireLease: (repoId, deviceId, ttlMs) =>
+      queue.acquireExecutorLease(projectId, repoId, deviceId, origin, ttlMs),
+    claimNext: (repoId, deviceId, epoch) =>
+      queue.claimNext(projectId, repoId, deviceId, epoch, origin),
     recordSpeculativeTree: async (entryId, input, deviceId, epoch) => {
-      const res = await queue.recordSpeculativeTree(projectId, entryId, input, deviceId, epoch, origin);
+      const res = await queue.recordSpeculativeTree(
+        projectId,
+        entryId,
+        input,
+        deviceId,
+        epoch,
+        origin,
+      );
       if (opts.onRecorded) await opts.onRecorded(work);
       return res;
     },
@@ -189,7 +202,11 @@ async function scenario(opts: ScenarioOptions = {}) {
   };
   const executor = new MergeExecutor({ deviceId: executorDevice, registry, client, validation });
 
-  const task = await tasks.create(projectId, { title: 'merge work', repoId: repo.repo_id, state: 'ready' }, { actor, deviceId: claimantDevice });
+  const task = await tasks.create(
+    projectId,
+    { title: 'merge work', repoId: repo.repo_id, state: 'ready' },
+    { actor, deviceId: claimantDevice },
+  );
   const enqueue = (branch: string) =>
     queue.enqueue(
       projectId,
@@ -215,7 +232,9 @@ describe('MergeExecutor happy path', () => {
     expect(g(s.originDir, ['rev-parse', 'main'])).toBe(outcome.mergedOid);
     expect(outcome.mergedOid).not.toBe(mainBefore);
     // The merge commit has two parents: the old target tip and the candidate tip.
-    const parents = g(s.work, ['rev-list', '--parents', '-n', '1', outcome.mergedOid]).split(' ').slice(1);
+    const parents = g(s.work, ['rev-list', '--parents', '-n', '1', outcome.mergedOid])
+      .split(' ')
+      .slice(1);
     expect(parents).toHaveLength(2);
     expect(parents[0]).toBe(mainBefore);
     // The merged tree carries both base and the new feature file.
@@ -245,7 +264,13 @@ describe('MergeExecutor happy path', () => {
   it('returns not_executor when another device holds the lease', async () => {
     const s = await scenario();
     const other = makeId('device');
-    const held = await queue.acquireExecutorLease(world.projectA, s.repo.repo_id, other, { actor, deviceId: other }, 60_000);
+    const held = await queue.acquireExecutorLease(
+      world.projectA,
+      s.repo.repo_id,
+      other,
+      { actor, deviceId: other },
+      60_000,
+    );
     expect(held.status).toBe('acquired');
     addCandidate(s.work, 'feature/x', 'x.txt', 'x\n');
     await s.enqueue('feature/x');
@@ -301,7 +326,8 @@ describe('MergeExecutor never merges unsafe work', () => {
     const mainBefore = g(s.originDir, ['rev-parse', 'main']);
     const outcome = await s.executor.tick(s.repo.repo_id);
     expect(outcome.status).toBe('ejected');
-    if (outcome.status === 'ejected') expect(outcome.reason).toBe('independent_validation_required');
+    if (outcome.status === 'ejected')
+      expect(outcome.reason).toBe('independent_validation_required');
     expect(g(s.originDir, ['rev-parse', 'main'])).toBe(mainBefore);
     const run = s.captured.find((e) => e.type === 'validation.completed');
     expect(run?.payload.independence).toBe('self');

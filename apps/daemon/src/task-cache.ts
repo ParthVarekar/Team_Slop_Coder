@@ -28,8 +28,14 @@ export interface TaskCacheOptions {
   onClaimRejected?: (rejection: ClaimRejection) => void;
 }
 
-const applied = metrics.counter('weft_task_cache_events_applied_total', 'Task coordination events projected');
-const rejections = metrics.counter('weft_task_cache_claim_rejections_total', 'Claim rejections observed');
+const applied = metrics.counter(
+  'weft_task_cache_events_applied_total',
+  'Task coordination events projected',
+);
+const rejections = metrics.counter(
+  'weft_task_cache_claim_rejections_total',
+  'Claim rejections observed',
+);
 
 function str(value: unknown): string | null {
   return typeof value === 'string' ? value : null;

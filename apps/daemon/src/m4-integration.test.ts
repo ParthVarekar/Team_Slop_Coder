@@ -16,7 +16,11 @@ import { createServer, type TeamServer } from '../../server/src/server.js';
 import type { ServerConfig } from '../../server/src/config.js';
 import { openCentralDatabase, type CentralDatabase } from '../../server/src/db.js';
 import { TaskService } from '../../server/src/tasks-service.js';
-import { startEmbeddedPostgres, freePort, type EmbeddedCluster } from '../../server/test/embedded.js';
+import {
+  startEmbeddedPostgres,
+  freePort,
+  type EmbeddedCluster,
+} from '../../server/test/embedded.js';
 import { seedWorld, type World } from '../../server/test/identity.js';
 import { draftEvent } from './events.js';
 import { RepoRegistry } from './repos.js';
@@ -152,12 +156,16 @@ async function ingest(events: EventEnvelope[]): Promise<void> {
   if (res.status !== 202) throw new Error(`ingest failed: ${res.status} ${await res.text()}`);
 }
 
-async function serverRun(runId: string): Promise<{ independence: string; tree_oid: string; state: string } | null> {
+async function serverRun(
+  runId: string,
+): Promise<{ independence: string; tree_oid: string; state: string } | null> {
   const res = await fetch(`${baseUrl}/v1/validation/runs/${runId}?projectId=${world.projectA}`, {
     headers: { authorization: `Bearer ${token}` },
   });
   if (res.status === 404) return null;
-  const body = (await res.json()) as { run: { independence: string; tree_oid: string; state: string } };
+  const body = (await res.json()) as {
+    run: { independence: string; tree_oid: string; state: string };
+  };
   return body.run;
 }
 
@@ -232,9 +240,24 @@ async function scenario(opts: ScenarioOptions = {}) {
     { actor, deviceId: claimantDevice },
   );
   const enqueue = (branch: string) =>
-    rpc.enqueue({ repo_id: repo.repo_id, task_id: task.id, branch, claimant_device_id: claimantDevice });
+    rpc.enqueue({
+      repo_id: repo.repo_id,
+      task_id: task.id,
+      branch,
+      claimant_device_id: claimantDevice,
+    });
 
-  return { work, originDir, repo, executor, attribution, claimantDevice, executorDevice, enqueue, captured };
+  return {
+    work,
+    originDir,
+    repo,
+    executor,
+    attribution,
+    claimantDevice,
+    executorDevice,
+    enqueue,
+    captured,
+  };
 }
 
 describe('M4 end-to-end over HTTP: merge queue', () => {
@@ -302,14 +325,22 @@ describe('M4 end-to-end over HTTP: merge queue', () => {
     // Directly exercise the HTTP never-merge-unvalidated gate on a testing entry.
     const repo = makeId('repo');
     const device = makeId('device');
-    const task = await tasks.create(world.projectA, { title: 'gate', repoId: repo, state: 'ready' }, { actor, deviceId: device });
+    const task = await tasks.create(
+      world.projectA,
+      { title: 'gate', repoId: repo, state: 'ready' },
+      { actor, deviceId: device },
+    );
     const lease = await rpc.acquireLease(repo, device, 60_000);
     const queued = await rpc.enqueue({ repo_id: repo, task_id: task.id, branch: 'weft/gate' });
     const claimed = await rpc.claimNext(repo, device, lease.lease.lease_epoch);
     expect(claimed?.id).toBe(queued.id);
     await rpc.recordSpeculativeTree(
       queued.id,
-      { speculative_tree_oid: 'a'.repeat(40), base_oid: 'b'.repeat(40), push_precondition_oid: 'b'.repeat(40) },
+      {
+        speculative_tree_oid: 'a'.repeat(40),
+        base_oid: 'b'.repeat(40),
+        push_precondition_oid: 'b'.repeat(40),
+      },
       device,
       lease.lease.lease_epoch,
     );
@@ -357,7 +388,12 @@ describe('M4 end-to-end over HTTP: regression attribution + safe revert', () => 
         timeoutMs: 5_000,
         outputCapBytes: 1_048_576,
         excerptBytes: 4096,
-        checks: [nodeCheck('bugcheck', "process.exit(require('fs').readFileSync('app.txt','utf8').includes('BUG')?1:0)")],
+        checks: [
+          nodeCheck(
+            'bugcheck',
+            "process.exit(require('fs').readFileSync('app.txt','utf8').includes('BUG')?1:0)",
+          ),
+        ],
       },
       emit: (draft) => {
         const env = draftEvent(source, draft);
@@ -368,7 +404,11 @@ describe('M4 end-to-end over HTTP: regression attribution + safe revert', () => 
     });
     const attribution = new AttributionEngine({ registry, validation, worktreeRoot });
 
-    const baseline = await rpc.establishBaseline({ repo_id: repo.repo_id, branch: 'main', commit_oid: baselineOid });
+    const baseline = await rpc.establishBaseline({
+      repo_id: repo.repo_id,
+      branch: 'main',
+      commit_oid: baselineOid,
+    });
     expect(baseline.state).toBe('healthy');
 
     const failingChecks = [{ check_id: 'bugcheck', paths: ['app.txt'] }];
@@ -413,7 +453,11 @@ describe('M4 queue coordination overhead (excluding checks)', () => {
     const TREE = 'a'.repeat(40);
     const BASE = 'b'.repeat(40);
     const MERGED = 'c'.repeat(40);
-    const task = await tasks.create(world.projectA, { title: 'perf', repoId: repo, state: 'ready' }, { actor, deviceId: claimant });
+    const task = await tasks.create(
+      world.projectA,
+      { title: 'perf', repoId: repo, state: 'ready' },
+      { actor, deviceId: claimant },
+    );
     const runId = makeId('validation');
     await pool.query(
       `INSERT INTO validation_runs
@@ -428,10 +472,20 @@ describe('M4 queue coordination overhead (excluding checks)', () => {
     const t0 = performance.now();
     const lease = await rpc.acquireLease(repo, device, 60_000);
     const epoch = lease.lease.lease_epoch;
-    const entry = await rpc.enqueue({ repo_id: repo, task_id: task.id, branch: 'weft/perf', claimant_device_id: claimant });
+    const entry = await rpc.enqueue({
+      repo_id: repo,
+      task_id: task.id,
+      branch: 'weft/perf',
+      claimant_device_id: claimant,
+    });
     const claimed = await rpc.claimNext(repo, device, epoch);
     expect(claimed?.id).toBe(entry.id);
-    await rpc.recordSpeculativeTree(entry.id, { speculative_tree_oid: TREE, base_oid: BASE, push_precondition_oid: BASE }, device, epoch);
+    await rpc.recordSpeculativeTree(
+      entry.id,
+      { speculative_tree_oid: TREE, base_oid: BASE, push_precondition_oid: BASE },
+      device,
+      epoch,
+    );
     await rpc.attachValidation(entry.id, runId, device, epoch);
     const landed = await rpc.advance(entry.id, MERGED, device, epoch);
     const elapsed = performance.now() - t0;

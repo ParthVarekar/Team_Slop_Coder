@@ -38,7 +38,10 @@ function harness() {
   const db = openSqlite(':memory:');
   migrate(db, DAEMON_MIGRATIONS);
   dbs.push(db);
-  const registry = new RepoRegistry(db, { deviceId: makeId('device'), projectId: makeId('project') });
+  const registry = new RepoRegistry(db, {
+    deviceId: makeId('device'),
+    projectId: makeId('project'),
+  });
   return { db, registry, selector: new TiaSelector({ registry }) };
 }
 
@@ -122,7 +125,12 @@ describe('selectAffectedTests (pure)', () => {
     const a = selectAffectedTests(graph, ['src/a.ts', 'src/c.test.ts']);
     const b = selectAffectedTests(graph, ['src/c.test.ts', 'src/a.ts']);
     expect(a).toEqual(b);
-    expect(a).toEqual(['__tests__/integration.ts', 'src/a.test.ts', 'src/b.test.ts', 'src/c.test.ts']);
+    expect(a).toEqual([
+      '__tests__/integration.ts',
+      'src/a.test.ts',
+      'src/b.test.ts',
+      'src/c.test.ts',
+    ]);
   });
 
   it('honors a custom test matcher', () => {
@@ -145,7 +153,9 @@ describe('TiaSelector over a real module graph', () => {
   it('selects a changed test directly and nothing for an unrelated change', async () => {
     const { registry, selector } = harness();
     const repo = await registry.register(makeRepo(FILES));
-    expect(await selector.affectedTests(repo.repo_id, ['src/other.test.ts'])).toEqual(['src/other.test.ts']);
+    expect(await selector.affectedTests(repo.repo_id, ['src/other.test.ts'])).toEqual([
+      'src/other.test.ts',
+    ]);
     expect(await selector.affectedTests(repo.repo_id, ['README.md'])).toEqual([]);
   });
 });

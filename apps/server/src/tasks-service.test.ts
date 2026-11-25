@@ -62,7 +62,11 @@ describe('server-authoritative tasks (real Postgres 16)', () => {
   });
 
   it('commutes disjoint field edits from the same stale base', async () => {
-    const t = await service.create(world.projectA, { title: 'original', description: 'd0' }, origin);
+    const t = await service.create(
+      world.projectA,
+      { title: 'original', description: 'd0' },
+      origin,
+    );
     const a = await service.update(t.id, world.projectA, 0, { title: 'A-title' }, origin);
     const b = await service.update(t.id, world.projectA, 0, { description: 'B-desc' }, origin);
     expect(a.version).toBe(1);
@@ -97,7 +101,13 @@ describe('server-authoritative tasks (real Postgres 16)', () => {
     const t = await service.create(world.projectA, { title: 'original' }, origin);
     await service.update(t.id, world.projectA, 0, { title: 'A' }, origin);
     const conflicted = await service.update(t.id, world.projectA, 0, { title: 'B' }, origin);
-    const resolved = await service.resolveEditConflict(t.id, world.projectA, conflicted.version, { title: 'merged' }, origin);
+    const resolved = await service.resolveEditConflict(
+      t.id,
+      world.projectA,
+      conflicted.version,
+      { title: 'merged' },
+      origin,
+    );
     expect(resolved.title).toBe('merged');
     expect(resolved.edit_conflict).toBeNull();
     expect(await service.rebuildSnapshot(t.id, world.projectA)).toEqual(resolved);
@@ -131,7 +141,12 @@ describe('server-authoritative tasks (real Postgres 16)', () => {
   it('rejects a claim when the task is not ready', async () => {
     const t = await service.create(world.projectA, { title: 'Backlog' }, origin);
     const c = claimant();
-    const res = await service.claim(t.id, world.projectA, { claimant: c.actor, deviceId: c.deviceId }, origin);
+    const res = await service.claim(
+      t.id,
+      world.projectA,
+      { claimant: c.actor, deviceId: c.deviceId },
+      origin,
+    );
     expect(res.ok).toBe(false);
     if (res.ok) throw new Error('expected rejection');
     expect(res.reason).toContain('backlog');
@@ -142,14 +157,26 @@ describe('server-authoritative tasks (real Postgres 16)', () => {
     const { id } = await readyTask('Offline race');
     const a = claimant();
     const b = claimant();
-    const first = await service.claim(id, world.projectA, { claimant: a.actor, deviceId: a.deviceId, provisional: true }, origin);
-    const second = await service.claim(id, world.projectA, { claimant: b.actor, deviceId: b.deviceId, provisional: true }, origin);
+    const first = await service.claim(
+      id,
+      world.projectA,
+      { claimant: a.actor, deviceId: a.deviceId, provisional: true },
+      origin,
+    );
+    const second = await service.claim(
+      id,
+      world.projectA,
+      { claimant: b.actor, deviceId: b.deviceId, provisional: true },
+      origin,
+    );
     expect(first.ok).toBe(true);
     if (!first.ok) throw new Error('expected first to win');
     expect(first.provisional).toBe(true);
     expect(second.ok).toBe(false);
     if (second.ok) throw new Error('expected second to lose');
-    expect(second.winner_claimant).toMatchObject({ user_id: (a.actor as { user_id: string }).user_id });
+    expect(second.winner_claimant).toMatchObject({
+      user_id: (a.actor as { user_id: string }).user_id,
+    });
     const rejection = await db.pool.query(
       `SELECT payload FROM coordination_events WHERE task_id=$1 AND type='task.claim_rejected'`,
       [id],
@@ -162,7 +189,12 @@ describe('server-authoritative tasks (real Postgres 16)', () => {
   it('release returns a claimed task to ready so it can be re-claimed', async () => {
     const { id, version } = await readyTask('Release');
     const c = claimant();
-    const claimed = await service.claim(id, world.projectA, { claimant: c.actor, deviceId: c.deviceId }, origin);
+    const claimed = await service.claim(
+      id,
+      world.projectA,
+      { claimant: c.actor, deviceId: c.deviceId },
+      origin,
+    );
     if (!claimed.ok) throw new Error('expected claim');
     const released = await service.release(id, world.projectA, claimed.snapshot.version, origin);
     expect(released.state).toBe('ready');
@@ -177,8 +209,12 @@ describe('server-authoritative tasks (real Postgres 16)', () => {
     const c = await service.create(world.projectA, { title: 'C' }, origin);
     await service.addDependency(b.id, world.projectA, a.id, origin);
     await service.addDependency(c.id, world.projectA, b.id, origin);
-    await expect(service.addDependency(a.id, world.projectA, c.id, origin)).rejects.toMatchObject({ code: 'cycle' });
-    await expect(service.addDependency(a.id, world.projectA, a.id, origin)).rejects.toMatchObject({ code: 'cycle' });
+    await expect(service.addDependency(a.id, world.projectA, c.id, origin)).rejects.toMatchObject({
+      code: 'cycle',
+    });
+    await expect(service.addDependency(a.id, world.projectA, a.id, origin)).rejects.toMatchObject({
+      code: 'cycle',
+    });
     expect(await service.listDependencies(c.id, world.projectA)).toEqual([b.id]);
   });
 
@@ -226,7 +262,11 @@ describe('server-authoritative tasks (real Postgres 16)', () => {
       `SELECT type, global_seq, payload FROM coordination_events WHERE task_id=$1 ORDER BY global_seq`,
       [t.id],
     );
-    expect(rows.rows.map((r) => r.type)).toEqual(['task.created', 'task.state_changed', 'task.claimed']);
+    expect(rows.rows.map((r) => r.type)).toEqual([
+      'task.created',
+      'task.state_changed',
+      'task.claimed',
+    ]);
     const seqs = rows.rows.map((r) => Number(r.global_seq));
     expect(seqs).toEqual([seqs[0], seqs[0] + 1, seqs[0] + 2]);
     expect(rows.rows[2].payload.claimant).toBeTruthy();
@@ -236,8 +276,12 @@ describe('server-authoritative tasks (real Postgres 16)', () => {
   it('isolates tasks per project', async () => {
     const t = await service.create(world.projectA, { title: 'Scoped' }, origin);
     expect(await service.get(t.id, world.projectB)).toBeUndefined();
-    await expect(service.claim(t.id, world.projectB, claimant(), origin)).rejects.toMatchObject({ code: 'not_found' });
-    await expect(service.rebuildSnapshot(t.id, world.projectB)).rejects.toMatchObject({ code: 'not_found' });
+    await expect(service.claim(t.id, world.projectB, claimant(), origin)).rejects.toMatchObject({
+      code: 'not_found',
+    });
+    await expect(service.rebuildSnapshot(t.id, world.projectB)).rejects.toMatchObject({
+      code: 'not_found',
+    });
   });
 
   it('rebuild equals the live snapshot after a mixed mutation sequence', async () => {
@@ -255,7 +299,9 @@ describe('server-authoritative tasks (real Postgres 16)', () => {
   });
 
   it('validates input and reports a TaskError', async () => {
-    await expect(service.create(world.projectA, { title: '' }, origin)).rejects.toBeInstanceOf(TaskError);
+    await expect(service.create(world.projectA, { title: '' }, origin)).rejects.toBeInstanceOf(
+      TaskError,
+    );
     await expect(
       service.update(makeId('task'), world.projectA, 0, { title: 'x' }, origin),
     ).rejects.toMatchObject({ code: 'not_found' });
@@ -269,7 +315,12 @@ describe('task claim CAS performance (real Postgres 16)', () => {
       const { id } = await readyTask('Perf');
       const c = claimant();
       const t0 = performance.now();
-      const res = await service.claim(id, world.projectA, { claimant: c.actor, deviceId: c.deviceId }, origin);
+      const res = await service.claim(
+        id,
+        world.projectA,
+        { claimant: c.actor, deviceId: c.deviceId },
+        origin,
+      );
       samples.push(performance.now() - t0);
       expect(res.ok).toBe(true);
     };
@@ -278,7 +329,9 @@ describe('task claim CAS performance (real Postgres 16)', () => {
     samples.length = 0;
     for (let i = 0; i < 60; i++) await claimOne();
     const sorted = [...samples].sort((a, b) => a - b);
-    const p95 = sorted[Math.min(sorted.length - 1, Math.floor(0.95 * (sorted.length - 1)))] as number;
+    const p95 = sorted[
+      Math.min(sorted.length - 1, Math.floor(0.95 * (sorted.length - 1)))
+    ] as number;
     expect(p95).toBeLessThanOrEqual(20);
   }, 30_000);
 });

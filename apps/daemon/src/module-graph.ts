@@ -175,7 +175,11 @@ export class ModuleGraphService {
   }
 
   /** Build the graph and return the transitive dependents of the changed paths. */
-  async impactedModules(repoId: string, changedPaths: readonly string[], options: ModuleGraphOptions = {}): Promise<string[]> {
+  async impactedModules(
+    repoId: string,
+    changedPaths: readonly string[],
+    options: ModuleGraphOptions = {},
+  ): Promise<string[]> {
     const graph = await this.build(repoId, options);
     return dependentsOf(graph, changedPaths);
   }

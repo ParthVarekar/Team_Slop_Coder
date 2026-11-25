@@ -298,7 +298,8 @@ function NotificationDetail({ notification }: { notification: Notification }) {
         </span>
         <h3 className="text-[14px] font-semibold leading-snug text-fg">{notification.title}</h3>
         <div className="mt-1 font-mono text-[11px] text-fg-subtle">
-          {new Date(notification.created_at).toLocaleString()} · {formatClock(notification.created_at)}
+          {new Date(notification.created_at).toLocaleString()} ·{' '}
+          {formatClock(notification.created_at)}
         </div>
       </div>
 

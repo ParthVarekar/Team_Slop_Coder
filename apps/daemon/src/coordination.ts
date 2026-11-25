@@ -5,10 +5,19 @@ import type { TaskCache } from './task-cache.js';
 import type { ChangeCache } from './change-cache.js';
 import type { LocalStore } from './store.js';
 
-const received = metrics.counter('weft_coordination_events_received_total', 'Coordination events applied');
-const reconnects = metrics.counter('weft_coordination_reconnects_total', 'Coordination reconnect attempts');
+const received = metrics.counter(
+  'weft_coordination_events_received_total',
+  'Coordination events applied',
+);
+const reconnects = metrics.counter(
+  'weft_coordination_reconnects_total',
+  'Coordination reconnect attempts',
+);
 const resyncs = metrics.counter('weft_coordination_resyncs_total', 'Forced coordination resyncs');
-const connectedGauge = metrics.gauge('weft_coordination_connected', 'Coordination link up (1) or stale (0)');
+const connectedGauge = metrics.gauge(
+  'weft_coordination_connected',
+  'Coordination link up (1) or stale (0)',
+);
 
 const CURSOR_KEY = 'coordination_cursor';
 

@@ -14,9 +14,12 @@ export function loadConnection(): TeamConnection | null {
     if (!raw) return null;
     const c = JSON.parse(raw) as Partial<TeamConnection>;
     if (
-      typeof c.serverUrl === 'string' && c.serverUrl &&
-      typeof c.token === 'string' && c.token &&
-      typeof c.projectId === 'string' && c.projectId
+      typeof c.serverUrl === 'string' &&
+      c.serverUrl &&
+      typeof c.token === 'string' &&
+      c.token &&
+      typeof c.projectId === 'string' &&
+      c.projectId
     ) {
       return { serverUrl: c.serverUrl, token: c.token, projectId: c.projectId };
     }

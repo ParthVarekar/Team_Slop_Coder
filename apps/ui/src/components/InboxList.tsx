@@ -1,6 +1,11 @@
 import { useStore } from '../store/useStore.js';
 import type { Notification, NotificationState } from '../lib/types.js';
-import { formatRelative, notificationKindColor, notificationKindLabel, shortId } from '../lib/format.js';
+import {
+  formatRelative,
+  notificationKindColor,
+  notificationKindLabel,
+  shortId,
+} from '../lib/format.js';
 import { InboxIcon } from './icons.js';
 
 const TABS: { state: NotificationState; label: string }[] = [

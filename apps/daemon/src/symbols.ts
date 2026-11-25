@@ -2,14 +2,7 @@ import { createHash } from 'node:crypto';
 import ts from 'typescript';
 
 export type SymbolKind =
-  | 'function'
-  | 'class'
-  | 'method'
-  | 'property'
-  | 'interface'
-  | 'type'
-  | 'enum'
-  | 'variable';
+  'function' | 'class' | 'method' | 'property' | 'interface' | 'type' | 'enum' | 'variable';
 
 export interface ExtractedSymbol {
   name: string;
@@ -91,7 +84,13 @@ function calleeName(expr: ts.LeftHandSideExpression, sf: ts.SourceFile): string 
  * git-diff invalidation. Never executes or evaluates the source.
  */
 export function extractSymbols(filePath: string, text: string): ExtractionResult {
-  const sf = ts.createSourceFile(filePath, text, ts.ScriptTarget.Latest, true, scriptKindOf(filePath));
+  const sf = ts.createSourceFile(
+    filePath,
+    text,
+    ts.ScriptTarget.Latest,
+    true,
+    scriptKindOf(filePath),
+  );
   const symbols: ExtractedSymbol[] = [];
   const edges: ExtractedEdge[] = [];
   const lineOf = (pos: number): number => sf.getLineAndCharacterOfPosition(pos).line + 1;
@@ -120,7 +119,12 @@ export function extractSymbols(filePath: string, text: string): ExtractionResult
     });
   };
 
-  const walkChildren = (node: ts.Node, container: string, enclosing: string, exp: boolean): void => {
+  const walkChildren = (
+    node: ts.Node,
+    container: string,
+    enclosing: string,
+    exp: boolean,
+  ): void => {
     node.forEachChild((child) => walk(child, container, enclosing, exp));
   };
 
@@ -128,7 +132,14 @@ export function extractSymbols(filePath: string, text: string): ExtractionResult
     if (ts.isFunctionDeclaration(node)) {
       const name = node.name?.getText(sf) ?? 'default';
       const exp = parentExp || isExported(node);
-      add(node, name, 'function', container, fnSignature(name, node.parameters, node.type, sf), exp);
+      add(
+        node,
+        name,
+        'function',
+        container,
+        fnSignature(name, node.parameters, node.type, sf),
+        exp,
+      );
       if (node.body) walkChildren(node.body, container, name, exp);
       return;
     }
@@ -141,18 +152,40 @@ export function extractSymbols(filePath: string, text: string): ExtractionResult
     }
     if (ts.isMethodDeclaration(node) || ts.isMethodSignature(node)) {
       const name = node.name.getText(sf);
-      add(node, name, 'method', container, fnSignature(name, node.parameters, node.type, sf), parentExp);
-      if (ts.isMethodDeclaration(node) && node.body) walkChildren(node.body, container, name, parentExp);
+      add(
+        node,
+        name,
+        'method',
+        container,
+        fnSignature(name, node.parameters, node.type, sf),
+        parentExp,
+      );
+      if (ts.isMethodDeclaration(node) && node.body)
+        walkChildren(node.body, container, name, parentExp);
       return;
     }
     if (ts.isConstructorDeclaration(node)) {
-      add(node, 'constructor', 'method', container, fnSignature('constructor', node.parameters, undefined, sf), parentExp);
+      add(
+        node,
+        'constructor',
+        'method',
+        container,
+        fnSignature('constructor', node.parameters, undefined, sf),
+        parentExp,
+      );
       if (node.body) walkChildren(node.body, container, 'constructor', parentExp);
       return;
     }
     if (ts.isGetAccessor(node) || ts.isSetAccessor(node)) {
       const name = node.name.getText(sf);
-      add(node, name, 'method', container, fnSignature(name, node.parameters, node.type, sf), parentExp);
+      add(
+        node,
+        name,
+        'method',
+        container,
+        fnSignature(name, node.parameters, node.type, sf),
+        parentExp,
+      );
       if (node.body) walkChildren(node.body, container, name, parentExp);
       return;
     }
@@ -206,7 +239,13 @@ export function extractSymbols(filePath: string, text: string): ExtractionResult
       const line = lineOf(node.getStart(sf));
       const clause = node.importClause;
       const push = (to: string): void => {
-        edges.push({ from_symbol: '<module>', to_name: to, kind: 'imports', module_specifier: spec, line });
+        edges.push({
+          from_symbol: '<module>',
+          to_name: to,
+          kind: 'imports',
+          module_specifier: spec,
+          line,
+        });
       };
       if (clause?.name) push(clause.name.getText(sf));
       const bindings = clause?.namedBindings;

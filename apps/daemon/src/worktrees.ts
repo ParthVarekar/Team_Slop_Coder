@@ -52,12 +52,7 @@ export interface WorktreeRecord {
 }
 
 export type WorktreeErrorCode =
-  | 'not_found'
-  | 'not_claimed'
-  | 'branch_busy'
-  | 'quarantined'
-  | 'already_assigned'
-  | 'invalid_base';
+  'not_found' | 'not_claimed' | 'branch_busy' | 'quarantined' | 'already_assigned' | 'invalid_base';
 
 export class WorktreeError extends Error {
   constructor(
@@ -125,11 +120,26 @@ function normalizePath(path: string): string {
   return process.platform === 'win32' ? slashed.toLowerCase() : slashed;
 }
 
-const provisioned = metrics.counter('weft_worktrees_provisioned_total', 'Confirmed worktrees provisioned');
-const quarantined = metrics.counter('weft_worktrees_quarantined_total', 'Provisional worktrees quarantined');
-const discardedTotal = metrics.counter('weft_worktrees_discarded_total', 'Worktrees discarded (work preserved)');
-const staleRecovered = metrics.counter('weft_worktrees_stale_recovered_total', 'Stale worktree locks recovered');
-const activeGauge = metrics.gauge('weft_worktrees_active', 'Worktrees currently active or quarantined');
+const provisioned = metrics.counter(
+  'weft_worktrees_provisioned_total',
+  'Confirmed worktrees provisioned',
+);
+const quarantined = metrics.counter(
+  'weft_worktrees_quarantined_total',
+  'Provisional worktrees quarantined',
+);
+const discardedTotal = metrics.counter(
+  'weft_worktrees_discarded_total',
+  'Worktrees discarded (work preserved)',
+);
+const staleRecovered = metrics.counter(
+  'weft_worktrees_stale_recovered_total',
+  'Stale worktree locks recovered',
+);
+const activeGauge = metrics.gauge(
+  'weft_worktrees_active',
+  'Worktrees currently active or quarantined',
+);
 
 /**
  * Provisions claim-gated, branch-per-task git worktrees off a shared clone.
@@ -417,8 +427,7 @@ export class WorktreeManager {
 
   get(worktreeId: string): WorktreeRecord | undefined {
     const row = this.db.prepare('SELECT * FROM worktrees WHERE worktree_id = ?').get(worktreeId) as
-      | WorktreeRow
-      | undefined;
+      WorktreeRow | undefined;
     return row ? toRecord(row) : undefined;
   }
 
@@ -500,12 +509,7 @@ export class WorktreeManager {
     });
   }
 
-  private emitBranch(
-    repo: RepoRecord,
-    branch: string,
-    headOid: string,
-    taskId: string,
-  ): void {
+  private emitBranch(repo: RepoRecord, branch: string, headOid: string, taskId: string): void {
     this.options.emit({
       type: 'branch.created',
       actor: this.options.actor,

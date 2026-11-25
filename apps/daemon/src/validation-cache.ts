@@ -65,9 +65,7 @@ export class ValidationCache {
 
   get(key: CacheKey): CacheEntry | null {
     const row = this.db
-      .prepare(
-        `SELECT * FROM validation_cache WHERE input_hash = ? AND toolchain_fingerprint = ?`,
-      )
+      .prepare(`SELECT * FROM validation_cache WHERE input_hash = ? AND toolchain_fingerprint = ?`)
       .get(key.inputHash, key.toolchainFingerprint) as CacheRow | undefined;
     if (!row) return null;
     if (row.quarantined !== 0) return null;

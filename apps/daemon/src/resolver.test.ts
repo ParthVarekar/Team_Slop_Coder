@@ -115,7 +115,11 @@ describe('ResolverClient exact references', () => {
   it('resolves type-based call sites with >=95% precision and labeled recall (decoy excluded)', async () => {
     const { dir, truth } = precisionFixture();
     const c = client();
-    const result = await c.resolve(dir, { filePath: 'src/lib.ts', name: 'getUser', kind: 'function' });
+    const result = await c.resolve(dir, {
+      filePath: 'src/lib.ts',
+      name: 'getUser',
+      kind: 'function',
+    });
 
     expect(result.precision).toBe('exact');
     const returned = new Set(result.references.filter((r) => !r.is_definition).map(key));
@@ -138,7 +142,9 @@ describe('ResolverClient exact references', () => {
     expect(returned.has('src/callerA.ts:4')).toBe(true);
     expect(returned.has('src/callerB.ts:3')).toBe(true);
     // The declaration itself is reported as a definition.
-    expect(result.references.some((r) => r.is_definition && r.file_path === 'src/lib.ts')).toBe(true);
+    expect(result.references.some((r) => r.is_definition && r.file_path === 'src/lib.ts')).toBe(
+      true,
+    );
   });
 
   it('returns symbol_not_found for an unknown symbol', async () => {
@@ -187,19 +193,23 @@ describe('ResolverClient exact references', () => {
 
   it('rejects with disabled when the resolver is turned off', async () => {
     const c = client({ enabled: false });
-    await expect(c.resolve('/tmp/whatever', { filePath: 'a.ts', name: 'x' })).rejects.toBeInstanceOf(
-      ResolverError,
+    await expect(
+      c.resolve('/tmp/whatever', { filePath: 'a.ts', name: 'x' }),
+    ).rejects.toBeInstanceOf(ResolverError);
+    await expect(c.resolve('/tmp/whatever', { filePath: 'a.ts', name: 'x' })).rejects.toMatchObject(
+      {
+        code: 'disabled',
+      },
     );
-    await expect(c.resolve('/tmp/whatever', { filePath: 'a.ts', name: 'x' })).rejects.toMatchObject({
-      code: 'disabled',
-    });
   });
 
   it('surfaces a per-request timeout as ResolverError timeout', async () => {
     const { dir } = precisionFixture();
     const c = client({ requestTimeoutMs: 1 });
-    await expect(c.resolve(dir, { filePath: 'src/lib.ts', name: 'getUser' })).rejects.toMatchObject({
-      code: 'timeout',
-    });
+    await expect(c.resolve(dir, { filePath: 'src/lib.ts', name: 'getUser' })).rejects.toMatchObject(
+      {
+        code: 'timeout',
+      },
+    );
   });
 });

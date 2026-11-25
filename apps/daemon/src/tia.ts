@@ -1,4 +1,9 @@
-import { dependentsOf, type ModuleGraph, type ModuleGraphOptions, ModuleGraphService } from './module-graph.js';
+import {
+  dependentsOf,
+  type ModuleGraph,
+  type ModuleGraphOptions,
+  ModuleGraphService,
+} from './module-graph.js';
 import type { RepoRegistry } from './repos.js';
 
 const TEST_FILE_RE = /(^|\/)(?:__tests__\/|[^/]*\.(?:test|spec)\.[jt]sx?$)/;

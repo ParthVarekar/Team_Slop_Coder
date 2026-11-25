@@ -6,7 +6,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { DAEMON_MIGRATIONS, migrate, openSqlite, type SqliteDatabase } from '@weft/core';
 import { makeId } from '@weft/protocol';
 import { RepoRegistry } from './repos.js';
-import { ModuleGraphService, ModuleGraphError, dependentsOf, type ModuleGraph } from './module-graph.js';
+import {
+  ModuleGraphService,
+  ModuleGraphError,
+  dependentsOf,
+  type ModuleGraph,
+} from './module-graph.js';
 
 const dirs: string[] = [];
 const dbs: SqliteDatabase[] = [];
@@ -37,7 +42,10 @@ function harness() {
   const db = openSqlite(':memory:');
   migrate(db, DAEMON_MIGRATIONS);
   dbs.push(db);
-  const registry = new RepoRegistry(db, { deviceId: makeId('device'), projectId: makeId('project') });
+  const registry = new RepoRegistry(db, {
+    deviceId: makeId('device'),
+    projectId: makeId('project'),
+  });
   const service = new ModuleGraphService({ registry });
   return { db, registry, service };
 }
@@ -80,7 +88,10 @@ describe('ModuleGraphService.build', () => {
     expect(paths).toEqual(['src/a.ts', 'src/b.ts', 'src/c.ts', 'src/d.ts', 'src/orphan.ts']);
     expect(graph.modules.find((m) => m.path === 'src/a.ts')?.dependencies).toEqual(['src/b.ts']);
     expect(graph.modules.find((m) => m.path === 'src/b.ts')?.dependents).toEqual(['src/a.ts']);
-    expect(graph.modules.find((m) => m.path === 'src/c.ts')?.dependents).toEqual(['src/b.ts', 'src/d.ts']);
+    expect(graph.modules.find((m) => m.path === 'src/c.ts')?.dependents).toEqual([
+      'src/b.ts',
+      'src/d.ts',
+    ]);
     expect(graph.modules.find((m) => m.path === 'src/orphan.ts')?.dependencies).toEqual([]);
     // a->b, b->c, d->c = 3 local edges; npm/core/non-source excluded.
     expect(graph.edges).toBe(3);

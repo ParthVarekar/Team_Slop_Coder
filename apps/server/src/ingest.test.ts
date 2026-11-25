@@ -92,10 +92,9 @@ describe('server ingest (real Postgres 16)', () => {
     expect(replay.accepted).toHaveLength(0);
     expect(replay.duplicates.map((d) => d.global_seq).sort((a, b) => a - b)).toEqual([1, 2]);
     expect(await countEvents(projectId)).toBe(2);
-    const seq = await db.pool.query(
-      'SELECT last_seq FROM project_stream_seq WHERE project_id=$1',
-      [projectId],
-    );
+    const seq = await db.pool.query('SELECT last_seq FROM project_stream_seq WHERE project_id=$1', [
+      projectId,
+    ]);
     expect(Number(seq.rows[0].last_seq)).toBe(2);
   });
 
@@ -142,9 +141,17 @@ describe('server ingest (real Postgres 16)', () => {
   it('isolates global_seq per project', async () => {
     const a = makeId('project');
     const b = makeId('project');
-    await service.ingestBatch([envelope({ projectId: a }), envelope({ projectId: b }), envelope({ projectId: a })]);
-    const sa = await db.pool.query('SELECT last_seq FROM project_stream_seq WHERE project_id=$1', [a]);
-    const sb = await db.pool.query('SELECT last_seq FROM project_stream_seq WHERE project_id=$1', [b]);
+    await service.ingestBatch([
+      envelope({ projectId: a }),
+      envelope({ projectId: b }),
+      envelope({ projectId: a }),
+    ]);
+    const sa = await db.pool.query('SELECT last_seq FROM project_stream_seq WHERE project_id=$1', [
+      a,
+    ]);
+    const sb = await db.pool.query('SELECT last_seq FROM project_stream_seq WHERE project_id=$1', [
+      b,
+    ]);
     expect(Number(sa.rows[0].last_seq)).toBe(2);
     expect(Number(sb.rows[0].last_seq)).toBe(1);
   });

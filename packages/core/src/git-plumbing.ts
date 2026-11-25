@@ -350,7 +350,10 @@ export async function diffNameOnly(
   branch: string,
   binary?: string,
 ): Promise<string[]> {
-  const out = await git(['diff', '--name-only', '-z', `${base}...${branch}`], { cwd: repo, binary });
+  const out = await git(['diff', '--name-only', '-z', `${base}...${branch}`], {
+    cwd: repo,
+    binary,
+  });
   return out.split('\0').filter((p) => p.length > 0);
 }
 
@@ -423,7 +426,9 @@ export async function mergeTreeWriteTree(
       const oid = out.split('\0')[0]?.trim() ?? '';
       // Exit 1 is ambiguous: conflicts (tree OID present) vs bad ref (no OID).
       if (e.code !== 1 || !OID_RE.test(oid)) {
-        throw new Error(`git merge-tree failed (exit ${e.code ?? '?'}): ${(e.stderr ?? '').trim()}`);
+        throw new Error(
+          `git merge-tree failed (exit ${e.code ?? '?'}): ${(e.stderr ?? '').trim()}`,
+        );
       }
       stdout = out;
       clean = false;
@@ -594,7 +599,10 @@ export async function updateRef(
 /** Parent oids of a commit (empty for a root commit). */
 export async function commitParents(repo: string, oid: string, binary?: string): Promise<string[]> {
   const out = await git(['rev-list', '--parents', '-n', '1', oid], { cwd: repo, binary });
-  const parts = out.trim().split(/\s+/).filter((p) => p.length > 0);
+  const parts = out
+    .trim()
+    .split(/\s+/)
+    .filter((p) => p.length > 0);
   return parts.slice(1);
 }
 
@@ -632,7 +640,10 @@ export async function logRange(
     if (!OID_RE.test(oid)) continue;
     commits.push({
       oid,
-      parents: (fields[1] ?? '').trim().split(/\s+/).filter((p) => p.length > 0),
+      parents: (fields[1] ?? '')
+        .trim()
+        .split(/\s+/)
+        .filter((p) => p.length > 0),
       author_name: fields[2] ?? '',
       author_email: fields[3] ?? '',
       authored_at: fields[4] ?? '',
@@ -648,10 +659,10 @@ export async function commitChangedPaths(
   oid: string,
   binary?: string,
 ): Promise<string[]> {
-  const out = await git(
-    ['diff-tree', '--root', '--no-commit-id', '--name-only', '-r', '-z', oid],
-    { cwd: repo, binary },
-  );
+  const out = await git(['diff-tree', '--root', '--no-commit-id', '--name-only', '-r', '-z', oid], {
+    cwd: repo,
+    binary,
+  });
   return out.split('\0').filter((p) => p.length > 0);
 }
 

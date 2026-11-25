@@ -64,7 +64,10 @@ describe('revertCommit preserves unrelated work', () => {
     const headBefore = await headOid(repo);
     const branchBefore = await currentBranch(repo);
 
-    const result = await revertCommit(repo, culprit, { worktreeRoot: worktreeRoot(), from: 'HEAD' });
+    const result = await revertCommit(repo, culprit, {
+      worktreeRoot: worktreeRoot(),
+      from: 'HEAD',
+    });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
@@ -100,7 +103,10 @@ describe('revertCommit never forces over conflicting later work', () => {
     commitFile(repo, 'fileA.txt', 'v3\n', 'later: fileA v3 (rewrites culprit lines)');
     const headBefore = await headOid(repo);
 
-    const result = await revertCommit(repo, culprit, { worktreeRoot: worktreeRoot(), from: 'HEAD' });
+    const result = await revertCommit(repo, culprit, {
+      worktreeRoot: worktreeRoot(),
+      from: 'HEAD',
+    });
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toBe('conflict');

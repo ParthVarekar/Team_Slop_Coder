@@ -20,7 +20,12 @@ const MEM_GATE_MB = 80;
 const INCREMENTAL_FILES = 200;
 
 const git = (cwd, args) =>
-  execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true, maxBuffer: 256 * 1024 * 1024 });
+  execFileSync('git', args, {
+    cwd,
+    encoding: 'utf8',
+    windowsHide: true,
+    maxBuffer: 256 * 1024 * 1024,
+  });
 const gc = () => {
   if (globalThis.gc) globalThis.gc();
 };
@@ -43,7 +48,10 @@ try {
         `export class C${i} { run(y: number): number { return y * 2; } }\n`,
     );
   }
-  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'perf-fixture', version: '0.0.0' }));
+  writeFileSync(
+    join(dir, 'package.json'),
+    JSON.stringify({ name: 'perf-fixture', version: '0.0.0' }),
+  );
   git(dir, ['init', '-q', '-b', 'main']);
   git(dir, ['config', 'user.name', 'Perf']);
   git(dir, ['config', 'user.email', 'perf@example.com']);
@@ -67,9 +75,15 @@ try {
   const fullP95 = hist.snapshot().p95;
 
   assert.equal(full.indexed, FILE_COUNT, `expected ${FILE_COUNT} indexed, got ${full.indexed}`);
-  assert.ok(fullMs <= FULL_GATE_MS, `full index ${fullMs.toFixed(0)}ms exceeds ${FULL_GATE_MS}ms gate`);
+  assert.ok(
+    fullMs <= FULL_GATE_MS,
+    `full index ${fullMs.toFixed(0)}ms exceeds ${FULL_GATE_MS}ms gate`,
+  );
   assert.ok(fullP95 <= P95_GATE_MS, `full per-file p95 ${fullP95}ms exceeds ${P95_GATE_MS}ms gate`);
-  assert.ok(marginalMb <= MEM_GATE_MB, `index marginal RSS ${marginalMb.toFixed(1)}MB exceeds ${MEM_GATE_MB}MB gate`);
+  assert.ok(
+    marginalMb <= MEM_GATE_MB,
+    `index marginal RSS ${marginalMb.toFixed(1)}MB exceeds ${MEM_GATE_MB}MB gate`,
+  );
 
   const changed = [];
   for (let i = 0; i < INCREMENTAL_FILES; i++) {

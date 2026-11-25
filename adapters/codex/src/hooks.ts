@@ -122,7 +122,9 @@ function mapEndReason(reason: string | undefined): 'completed' | 'interrupted' {
 const PATCH_TOOL = 'apply_patch';
 const PATCH_HEADER = /^\*\*\*\s+(Add|Update|Delete)\s+File:\s+(.+?)\s*$/;
 
-function parseApplyPatch(command: string): { path: string; change_kind: 'add' | 'modify' | 'delete' }[] {
+function parseApplyPatch(
+  command: string,
+): { path: string; change_kind: 'add' | 'modify' | 'delete' }[] {
   const changes: { path: string; change_kind: 'add' | 'modify' | 'delete' }[] = [];
   for (const line of command.split('\n')) {
     const match = PATCH_HEADER.exec(line);
@@ -206,7 +208,11 @@ export function translateHook(raw: unknown, ctx: AdapterContext): AdapterEvent[]
         {
           ...base,
           type: 'session.status',
-          payload: { status: 'waiting_permission', detail: truncate(detail, 200), tool_name: toolName },
+          payload: {
+            status: 'waiting_permission',
+            detail: truncate(detail, 200),
+            tool_name: toolName,
+          },
         },
       ];
     }
@@ -274,13 +280,17 @@ export function translateHook(raw: unknown, ctx: AdapterContext): AdapterEvent[]
           type: 'session.status',
           payload: {
             status: 'idle',
-            ...(h.last_assistant_message ? { detail: truncate(h.last_assistant_message, 200) } : {}),
+            ...(h.last_assistant_message
+              ? { detail: truncate(h.last_assistant_message, 200) }
+              : {}),
           },
         },
       ];
 
     case 'Interrupt':
-      return [{ ...base, type: 'session.status', payload: { status: 'idle', detail: 'interrupted' } }];
+      return [
+        { ...base, type: 'session.status', payload: { status: 'idle', detail: 'interrupted' } },
+      ];
 
     case 'SessionEnd':
       return [{ ...base, type: 'session.ended', payload: { reason: mapEndReason(h.reason) } }];

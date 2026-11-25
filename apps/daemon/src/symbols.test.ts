@@ -63,8 +63,14 @@ describe('extractSymbols golden fixtures', () => {
       signature: 'class Calculator',
       exported: true,
     });
-    expect(byName(symbols, 'Shape')).toMatchObject({ kind: 'interface', signature: 'interface Shape' });
-    expect(byName(symbols, 'ID')).toMatchObject({ kind: 'type', signature: 'type ID = string | number' });
+    expect(byName(symbols, 'Shape')).toMatchObject({
+      kind: 'interface',
+      signature: 'interface Shape',
+    });
+    expect(byName(symbols, 'ID')).toMatchObject({
+      kind: 'type',
+      signature: 'type ID = string | number',
+    });
     expect(byName(symbols, 'Color')).toMatchObject({ kind: 'enum', signature: 'enum Color' });
     expect(byName(symbols, 'internal')).toMatchObject({ kind: 'variable', exported: false });
   });
@@ -104,7 +110,11 @@ describe('extractSymbols golden fixtures', () => {
     const imports = edges.filter((e) => e.kind === 'imports');
     expect(imports).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ to_name: 'helper', module_specifier: './util', from_symbol: '<module>' }),
+        expect.objectContaining({
+          to_name: 'helper',
+          module_specifier: './util',
+          from_symbol: '<module>',
+        }),
         expect.objectContaining({ to_name: '* as ns', module_specifier: './ns' }),
       ]),
     );
@@ -130,31 +140,50 @@ describe('extractSymbols golden fixtures', () => {
 
   it('changes content_hash but not signature when only the body changes', () => {
     const a = extractSymbols('f.ts', 'export function f(x: number): number {\n  return x;\n}\n');
-    const b = extractSymbols('f.ts', 'export function f(x: number): number {\n  return x + 1;\n}\n');
+    const b = extractSymbols(
+      'f.ts',
+      'export function f(x: number): number {\n  return x + 1;\n}\n',
+    );
     expect(byName(a.symbols, 'f').signature).toBe(byName(b.symbols, 'f').signature);
     expect(byName(a.symbols, 'f').content_hash).not.toBe(byName(b.symbols, 'f').content_hash);
   });
 
   it('normalizes whitespace in signatures', () => {
-    const spaced = extractSymbols('f.ts', 'export function f( x : number ,  y?:string ) :  boolean { return true; }');
+    const spaced = extractSymbols(
+      'f.ts',
+      'export function f( x : number ,  y?:string ) :  boolean { return true; }',
+    );
     expect(byName(spaced.symbols, 'f').signature).toBe('f(x: number, y?: string): boolean');
   });
 });
 
 describe('extractSymbols JS/JSX handling', () => {
   it('parses plain JS without type annotations', () => {
-    const { symbols } = extractSymbols('m.js', 'export function run(a, b) { return a + b; }\nconst x = 1;');
-    expect(byName(symbols, 'run')).toMatchObject({ kind: 'function', signature: 'run(a, b)', exported: true });
+    const { symbols } = extractSymbols(
+      'm.js',
+      'export function run(a, b) { return a + b; }\nconst x = 1;',
+    );
+    expect(byName(symbols, 'run')).toMatchObject({
+      kind: 'function',
+      signature: 'run(a, b)',
+      exported: true,
+    });
     expect(byName(symbols, 'x')).toMatchObject({ kind: 'variable', exported: false });
   });
 
   it('parses JSX/TSX components', () => {
-    const { symbols } = extractSymbols('c.tsx', 'export const App = () => <div className="x">hi</div>;');
+    const { symbols } = extractSymbols(
+      'c.tsx',
+      'export const App = () => <div className="x">hi</div>;',
+    );
     expect(byName(symbols, 'App')).toMatchObject({ kind: 'variable', exported: true });
   });
 
   it('handles rest and optional parameters', () => {
-    const { symbols } = extractSymbols('r.ts', 'export function f(a: string, ...rest: number[]): void {}');
+    const { symbols } = extractSymbols(
+      'r.ts',
+      'export function f(a: string, ...rest: number[]): void {}',
+    );
     expect(byName(symbols, 'f').signature).toBe('f(a: string, ...rest: number[]): void');
   });
 

@@ -72,7 +72,11 @@ function notice(kind: string, fields: NoticeFields = {}, o: EnvOpts = {}): Event
 describe('server notification projection (real Postgres 16)', () => {
   it('materializes an inbox card from ingest and is idempotent on replay', async () => {
     const taskId = makeId('task');
-    const event = notice('approval', { subject: 'Merge task #12?', title: 'Approve merge' }, { taskId });
+    const event = notice(
+      'approval',
+      { subject: 'Merge task #12?', title: 'Approve merge' },
+      { taskId },
+    );
     const res = await ingest.ingestBatch([event]);
     expect(res.rejected).toHaveLength(0);
     expect(res.accepted).toHaveLength(1);
@@ -94,8 +98,9 @@ describe('server notification projection (real Postgres 16)', () => {
     const replay = await ingest.ingestBatch([event]);
     expect(replay.accepted).toHaveLength(0);
     expect(replay.duplicates).toHaveLength(1);
-    expect(await notifications.list(world.projectA, { userId: world.memberUser, kind: 'approval' }))
-      .toHaveLength(1);
+    expect(
+      await notifications.list(world.projectA, { userId: world.memberUser, kind: 'approval' }),
+    ).toHaveLength(1);
   });
 
   it('derives a kind label when no title is supplied', async () => {
@@ -110,8 +115,12 @@ describe('server notification projection (real Postgres 16)', () => {
     const targeted = notice('mention', { target_user_id: world.viewerUser });
     const fallback = notice('question', { subject: 'Which approach?' });
     await ingest.ingestBatch([targeted, fallback]);
-    expect((await notifications.get(targeted.event_id, world.projectA))?.user_id).toBe(world.viewerUser);
-    expect((await notifications.get(fallback.event_id, world.projectA))?.user_id).toBe(world.memberUser);
+    expect((await notifications.get(targeted.event_id, world.projectA))?.user_id).toBe(
+      world.viewerUser,
+    );
+    expect((await notifications.get(fallback.event_id, world.projectA))?.user_id).toBe(
+      world.memberUser,
+    );
   });
 
   it('skips a notification with no determinable recipient without rolling back the batch', async () => {
@@ -135,7 +144,11 @@ describe('server notification projection (real Postgres 16)', () => {
 
   it('skips notifications for an unknown project without rolling back the batch', async () => {
     const unknownProject = makeId('project');
-    const unknown = notice('mention', { target_user_id: world.memberUser }, { projectId: unknownProject });
+    const unknown = notice(
+      'mention',
+      { target_user_id: world.memberUser },
+      { projectId: unknownProject },
+    );
     const known = notice('mention', { target_user_id: world.memberUser });
     const res = await ingest.ingestBatch([unknown, known]);
     expect(res.rejected).toHaveLength(0);
@@ -145,25 +158,54 @@ describe('server notification projection (real Postgres 16)', () => {
   });
 
   it('isolates cards per project and filters the list by user, state and kind', async () => {
-    const a = notice('isolation_probe', { target_user_id: world.memberUser }, { projectId: world.projectA });
-    const b = notice('isolation_probe', { target_user_id: world.memberUser }, { projectId: world.projectB });
+    const a = notice(
+      'isolation_probe',
+      { target_user_id: world.memberUser },
+      { projectId: world.projectA },
+    );
+    const b = notice(
+      'isolation_probe',
+      { target_user_id: world.memberUser },
+      { projectId: world.projectB },
+    );
     await ingest.ingestBatch([a, b]);
     expect(await notifications.get(a.event_id, world.projectB)).toBeUndefined();
-    expect(await notifications.list(world.projectA, { userId: world.memberUser, kind: 'isolation_probe' }))
-      .toHaveLength(1);
-    expect(await notifications.list(world.projectB, { userId: world.memberUser, kind: 'isolation_probe' }))
-      .toHaveLength(1);
+    expect(
+      await notifications.list(world.projectA, {
+        userId: world.memberUser,
+        kind: 'isolation_probe',
+      }),
+    ).toHaveLength(1);
+    expect(
+      await notifications.list(world.projectB, {
+        userId: world.memberUser,
+        kind: 'isolation_probe',
+      }),
+    ).toHaveLength(1);
     await notifications.setState(a.event_id, world.projectA, 'done', origin);
-    expect(await notifications.list(world.projectA, { userId: world.memberUser, kind: 'isolation_probe', state: 'inbox' }))
-      .toHaveLength(0);
-    expect(await notifications.list(world.projectA, { userId: world.memberUser, kind: 'isolation_probe', state: 'done' }))
-      .toHaveLength(1);
+    expect(
+      await notifications.list(world.projectA, {
+        userId: world.memberUser,
+        kind: 'isolation_probe',
+        state: 'inbox',
+      }),
+    ).toHaveLength(0);
+    expect(
+      await notifications.list(world.projectA, {
+        userId: world.memberUser,
+        kind: 'isolation_probe',
+        state: 'done',
+      }),
+    ).toHaveLength(1);
   });
 });
 
 describe('inbox triage', () => {
   it('moves a card inbox → saved → done and is idempotent', async () => {
-    const event = notice('question', { subject: 'Review please', target_user_id: world.memberUser });
+    const event = notice('question', {
+      subject: 'Review please',
+      target_user_id: world.memberUser,
+    });
     await ingest.ingestBatch([event]);
     const saved = await notifications.setState(event.event_id, world.projectA, 'saved', origin);
     expect(saved.state).toBe('saved');
@@ -192,14 +234,23 @@ describe('inbox triage', () => {
       .catch((e: unknown) => e);
     expect(err).toMatchObject({ code: 'not_found' });
     expect((await notifications.get(event.event_id, world.projectA))?.state).toBe('inbox');
-    const ok = await notifications.setState(event.event_id, world.projectA, 'done', origin, world.memberUser);
+    const ok = await notifications.setState(
+      event.event_id,
+      world.projectA,
+      'done',
+      origin,
+      world.memberUser,
+    );
     expect(ok.state).toBe('done');
   });
 });
 
 describe('team directory (developer attribution)', () => {
   it('resolves display names with email local-part fallback', async () => {
-    await db.pool.query('UPDATE users SET display_name = $2 WHERE id = $1', [world.memberUser, 'Priya']);
+    await db.pool.query('UPDATE users SET display_name = $2 WHERE id = $1', [
+      world.memberUser,
+      'Priya',
+    ]);
     const directory = await auth.listDirectory(world.projectA);
     const priya = directory.find((d) => d.userId === world.memberUser);
     expect(priya?.displayName).toBe('Priya');

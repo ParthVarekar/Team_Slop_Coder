@@ -21,11 +21,7 @@ export type TaskPriority = z.infer<typeof TaskPrioritySchema>;
 export { TASK_TRANSITIONS, canTransition } from '@weft/protocol';
 
 export type TaskErrorCode =
-  | 'not_found'
-  | 'conflict'
-  | 'invalid_transition'
-  | 'validation'
-  | 'evidence_required';
+  'not_found' | 'conflict' | 'invalid_transition' | 'validation' | 'evidence_required';
 
 export class TaskError extends Error {
   constructor(

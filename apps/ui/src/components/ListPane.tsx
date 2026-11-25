@@ -1,13 +1,7 @@
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { api } from '../api/client.js';
 import { useStore } from '../store/useStore.js';
-import {
-  priorityColor,
-  taskStateColor,
-  type Repo,
-  type Session,
-  type Task,
-} from '../lib/types.js';
+import { priorityColor, taskStateColor, type Repo, type Session, type Task } from '../lib/types.js';
 import { basename, formatRelative, shortId } from '../lib/format.js';
 import { sessionDeveloperLabel } from '../lib/sessions.js';
 import { ArchiveIcon, CameraIcon, PlusIcon, RefreshIcon, ReposIcon } from './icons.js';
@@ -60,7 +54,8 @@ function SessionList() {
     <ul className="flex flex-col">
       {sessions.map((s: Session) => {
         const active = selectedSessionId === s.session_id;
-        const label = mode === 'team' ? sessionDeveloperLabel(s, directory) : (s.provider_id ?? 'agent');
+        const label =
+          mode === 'team' ? sessionDeveloperLabel(s, directory) : (s.provider_id ?? 'agent');
         return (
           <li key={s.session_id}>
             <button
@@ -72,9 +67,7 @@ function SessionList() {
             >
               <div className="flex items-center gap-2">
                 <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${sessionDot(s.status)}`} />
-                <span className="truncate font-medium text-fg">
-                  {label}
-                </span>
+                <span className="truncate font-medium text-fg">{label}</span>
                 <span className="ml-auto shrink-0 font-mono text-[10px] text-fg-subtle">
                   {shortId(s.session_id)}
                 </span>
@@ -138,7 +131,9 @@ function TaskList() {
                   {t.state.replace('_', ' ')}
                 </span>
                 {t.branch && <span className="truncate font-mono">{t.branch}</span>}
-                <span className="ml-auto shrink-0">{t.updated_at ? formatRelative(t.updated_at) : ''}</span>
+                <span className="ml-auto shrink-0">
+                  {t.updated_at ? formatRelative(t.updated_at) : ''}
+                </span>
               </div>
             </button>
           </li>
@@ -228,7 +223,10 @@ function RepoList() {
                     </IconAction>
                   </span>
                 </div>
-                <div className="truncate pl-6 font-mono text-[10px] text-fg-subtle" title={r.root_path}>
+                <div
+                  className="truncate pl-6 font-mono text-[10px] text-fg-subtle"
+                  title={r.root_path}
+                >
                   {r.root_path}
                 </div>
               </div>
@@ -401,7 +399,12 @@ function RepoForm({ onDone }: { onDone: () => void }) {
   );
 }
 
-const TAB_TITLE = { sessions: 'Sessions', tasks: 'Tasks', repos: 'Repositories', inbox: 'Inbox' } as const;
+const TAB_TITLE = {
+  sessions: 'Sessions',
+  tasks: 'Tasks',
+  repos: 'Repositories',
+  inbox: 'Inbox',
+} as const;
 
 export function ListPane() {
   const listTab = useStore((s) => s.listTab);

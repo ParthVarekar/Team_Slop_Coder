@@ -1,9 +1,5 @@
 import type { z } from 'zod';
-import type {
-  ConflictKindSchema,
-  ConflictSeveritySchema,
-  ConflictStateSchema,
-} from './catalog.js';
+import type { ConflictKindSchema, ConflictSeveritySchema, ConflictStateSchema } from './catalog.js';
 
 export type ConflictKind = z.infer<typeof ConflictKindSchema>;
 export type ConflictSeverity = z.infer<typeof ConflictSeveritySchema>;

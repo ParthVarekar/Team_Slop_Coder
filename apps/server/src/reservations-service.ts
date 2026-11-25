@@ -7,11 +7,26 @@ import { appendCoordinationEvent } from './emit.js';
 import { recordAudit } from './audit.js';
 import type { Origin } from './tasks-service.js';
 
-const acquired = metrics.counter('weft_server_reservations_acquired_total', 'Reservation leases acquired');
-const renewed = metrics.counter('weft_server_reservations_renewed_total', 'Reservation leases renewed');
-const released = metrics.counter('weft_server_reservations_released_total', 'Reservation leases released');
-const denied = metrics.counter('weft_server_reservations_denied_total', 'Reservation acquires denied');
-const expired = metrics.counter('weft_server_reservations_expired_total', 'Reservation leases expired past grace');
+const acquired = metrics.counter(
+  'weft_server_reservations_acquired_total',
+  'Reservation leases acquired',
+);
+const renewed = metrics.counter(
+  'weft_server_reservations_renewed_total',
+  'Reservation leases renewed',
+);
+const released = metrics.counter(
+  'weft_server_reservations_released_total',
+  'Reservation leases released',
+);
+const denied = metrics.counter(
+  'weft_server_reservations_denied_total',
+  'Reservation acquires denied',
+);
+const expired = metrics.counter(
+  'weft_server_reservations_expired_total',
+  'Reservation leases expired past grace',
+);
 
 /** Default lease TTL and post-expiry grace. During grace only the holder may renew;
  *  the lock still blocks others (no mid-edit steal). Past grace it is reclaimable. */
@@ -130,10 +145,17 @@ export class ReservationService {
     private readonly graceMs: number = DEFAULT_LEASE_GRACE_MS,
   ) {}
 
-  async acquire(projectId: string, input: AcquireReservationInput, origin: Origin): Promise<AcquireResult> {
+  async acquire(
+    projectId: string,
+    input: AcquireReservationInput,
+    origin: Origin,
+  ): Promise<AcquireResult> {
     const parsed = AcquireReservationSchema.safeParse(input);
     if (!parsed.success)
-      throw new ReservationError('validation', parsed.error.issues.map((i) => i.message).join('; '));
+      throw new ReservationError(
+        'validation',
+        parsed.error.issues.map((i) => i.message).join('; '),
+      );
     const data = parsed.data;
     return withTransaction(this.pool, async (client) => {
       await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
@@ -172,7 +194,9 @@ export class ReservationService {
         }
         // Lapsed past grace: release it so the new acquire can proceed.
         await this.markReleased(client, existing, 'expired');
-        await this.emit(client, projectId, 'reservation.released', existing, origin.actor, { reason: 'expired' });
+        await this.emit(client, projectId, 'reservation.released', existing, origin.actor, {
+          reason: 'expired',
+        });
         expired.inc();
       }
 
@@ -200,25 +224,47 @@ export class ReservationService {
             expires_at, renewed_at, grace_until, state, lease_epoch, created_at, released_reason)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
         [
-          reservation.id, projectId, reservation.repo_id, reservation.task_id, reservation.session_id,
-          reservation.path_glob, reservation.mode, reservation.holder_device_id, reservation.expires_at,
-          reservation.renewed_at, reservation.grace_until, reservation.state, reservation.lease_epoch,
-          reservation.created_at, reservation.released_reason,
+          reservation.id,
+          projectId,
+          reservation.repo_id,
+          reservation.task_id,
+          reservation.session_id,
+          reservation.path_glob,
+          reservation.mode,
+          reservation.holder_device_id,
+          reservation.expires_at,
+          reservation.renewed_at,
+          reservation.grace_until,
+          reservation.state,
+          reservation.lease_epoch,
+          reservation.created_at,
+          reservation.released_reason,
         ],
       );
       await this.emit(client, projectId, 'reservation.acquired', reservation, origin.actor);
       await this.audit(client, projectId, origin.actor, 'reservation.acquired', reservation);
       acquired.inc();
-      this.logger?.debug({ reservationId: reservation.id, projectId }, 'reservation lease acquired');
+      this.logger?.debug(
+        { reservationId: reservation.id, projectId },
+        'reservation lease acquired',
+      );
       return { status: 'acquired', reservation };
     });
   }
 
-  async renew(projectId: string, id: string, taskId: string, origin: Origin, ttlMs?: number): Promise<ReservationSnapshot> {
+  async renew(
+    projectId: string,
+    id: string,
+    taskId: string,
+    origin: Origin,
+    ttlMs?: number,
+  ): Promise<ReservationSnapshot> {
     return withTransaction(this.pool, async (client) => {
       const r = await this.lock(client, projectId, id);
-      if (r.state !== 'active') throw new ReservationError('invalid_transition', 'lease is not active');
-      if (r.task_id !== taskId) throw new ReservationError('forbidden', 'only the holder task may renew');
+      if (r.state !== 'active')
+        throw new ReservationError('invalid_transition', 'lease is not active');
+      if (r.task_id !== taskId)
+        throw new ReservationError('forbidden', 'only the holder task may renew');
       const now = Date.now();
       const end = effectiveExpiry(r);
       if (end != null && now >= end)
@@ -232,14 +278,23 @@ export class ReservationService {
     });
   }
 
-  async release(projectId: string, id: string, taskId: string, origin: Origin, reason?: string): Promise<ReservationSnapshot> {
+  async release(
+    projectId: string,
+    id: string,
+    taskId: string,
+    origin: Origin,
+    reason?: string,
+  ): Promise<ReservationSnapshot> {
     return withTransaction(this.pool, async (client) => {
       const r = await this.lock(client, projectId, id);
-      if (r.task_id !== taskId) throw new ReservationError('forbidden', 'only the holder task may release');
+      if (r.task_id !== taskId)
+        throw new ReservationError('forbidden', 'only the holder task may release');
       if (r.state === 'released') return r;
       await this.markReleased(client, r, reason ?? 'released');
       const next = { ...r, state: 'released' as const, released_reason: reason ?? 'released' };
-      await this.emit(client, projectId, 'reservation.released', next, origin.actor, { reason: next.released_reason });
+      await this.emit(client, projectId, 'reservation.released', next, origin.actor, {
+        reason: next.released_reason,
+      });
       await this.audit(client, projectId, origin.actor, 'reservation.released', next);
       released.inc();
       return next;
@@ -259,7 +314,14 @@ export class ReservationService {
         const end = effectiveExpiry(r);
         if (end == null || now < end) continue;
         await this.markReleased(client, r, 'expired');
-        await this.emit(client, projectId, 'reservation.released', r, { system: 'weft-server' }, { reason: 'expired' });
+        await this.emit(
+          client,
+          projectId,
+          'reservation.released',
+          r,
+          { system: 'weft-server' },
+          { reason: 'expired' },
+        );
         count++;
       }
       if (count > 0) expired.inc(count);
@@ -275,7 +337,10 @@ export class ReservationService {
     return res.rows[0] ? rowToReservation(res.rows[0]) : undefined;
   }
 
-  async list(projectId: string, options: ReservationListOptions = {}): Promise<ReservationSnapshot[]> {
+  async list(
+    projectId: string,
+    options: ReservationListOptions = {},
+  ): Promise<ReservationSnapshot[]> {
     const params: unknown[] = [projectId];
     let where = 'project_id = $1';
     if (options.repoId) {
@@ -328,7 +393,11 @@ export class ReservationService {
     );
   }
 
-  private async markReleased(client: Client, r: ReservationSnapshot, reason: string): Promise<void> {
+  private async markReleased(
+    client: Client,
+    r: ReservationSnapshot,
+    reason: string,
+  ): Promise<void> {
     await client.query(
       `UPDATE file_reservations SET state='released', released_reason=$2 WHERE id=$1`,
       [r.id, reason],

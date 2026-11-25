@@ -55,7 +55,11 @@ describe('EnforcementCache reservations', () => {
     const cache = new EnforcementCache();
     cache.setStale(false);
     cache.applyEvent(
-      coord(1, 'reservation.acquired', { path_glob: 'src/**', mode: 'hard', holder_task_id: 'task_owner' }),
+      coord(1, 'reservation.acquired', {
+        path_glob: 'src/**',
+        mode: 'hard',
+        holder_task_id: 'task_owner',
+      }),
     );
     expect(cache.checkReservation('src/a.ts', 'task_other')).toBe('blocked');
     expect(cache.checkReservation('src/a.ts', 'task_owner')).toBe('pass');
@@ -65,7 +69,11 @@ describe('EnforcementCache reservations', () => {
   it('warns on a soft reservation when fresh but fails open when stale', () => {
     const cache = new EnforcementCache();
     cache.applyEvent(
-      coord(1, 'reservation.acquired', { path_glob: 'src/**', mode: 'soft', holder_task_id: 'task_owner' }),
+      coord(1, 'reservation.acquired', {
+        path_glob: 'src/**',
+        mode: 'soft',
+        holder_task_id: 'task_owner',
+      }),
     );
     cache.setStale(false);
     expect(cache.checkReservation('src/a.ts', 'task_other')).toBe('warn');
@@ -94,7 +102,11 @@ describe('EnforcementCache reservations', () => {
     const cache = new EnforcementCache();
     cache.setStale(false);
     cache.applyEvent(
-      coord(1, 'reservation.acquired', { path_glob: 'src/**', mode: 'soft', holder_task_id: 'task_owner' }),
+      coord(1, 'reservation.acquired', {
+        path_glob: 'src/**',
+        mode: 'soft',
+        holder_task_id: 'task_owner',
+      }),
     );
     cache.applyEvent(coord(2, 'reservation.released', { path_glob: 'src/**', mode: 'soft' }));
     expect(cache.checkReservation('src/a.ts', 'task_other')).toBe('pass');
@@ -104,12 +116,20 @@ describe('EnforcementCache reservations', () => {
     const cache = new EnforcementCache();
     cache.setStale(false);
     cache.applyEvent(
-      coord(1, 'reservation.acquired', { path_glob: 'src/**', mode: 'hard', holder_task_id: 'task_owner' }),
+      coord(1, 'reservation.acquired', {
+        path_glob: 'src/**',
+        mode: 'hard',
+        holder_task_id: 'task_owner',
+      }),
     );
     cache.applyEvent(coord(2, 'reservation.released', { path_glob: 'src/**', mode: 'hard' }));
     expect(cache.checkReservation('src/a.ts', 'task_other')).toBe('pass');
     cache.applyEvent(
-      coord(3, 'reservation.renewed', { path_glob: 'src/**', mode: 'hard', holder_task_id: 'task_owner' }),
+      coord(3, 'reservation.renewed', {
+        path_glob: 'src/**',
+        mode: 'hard',
+        holder_task_id: 'task_owner',
+      }),
     );
     expect(cache.checkReservation('src/a.ts', 'task_other')).toBe('blocked');
   });
@@ -211,7 +231,13 @@ describe('EnforcementCache claims and conflicts', () => {
 
   it('projects conflict lifecycle by canonical key', () => {
     const cache = new EnforcementCache();
-    cache.applyEvent(coord(1, 'conflict.detected', { canonical_key: 'k1', kind: 'file_overlap', severity: 'blocking' }));
+    cache.applyEvent(
+      coord(1, 'conflict.detected', {
+        canonical_key: 'k1',
+        kind: 'file_overlap',
+        severity: 'blocking',
+      }),
+    );
     expect(cache.getConflict('k1')?.state).toBe('open');
     cache.applyEvent(coord(2, 'conflict.resolved', { canonical_key: 'k1' }));
     expect(cache.getConflict('k1')?.state).toBe('resolved');
@@ -222,7 +248,13 @@ describe('EnforcementCache claims and conflicts', () => {
 describe('EnforcementCache replay safety', () => {
   it('ignores events at or below the applied cursor (idempotent replay)', () => {
     const cache = new EnforcementCache();
-    cache.applyEvent(coord(5, 'reservation.acquired', { path_glob: 'src/**', mode: 'hard', holder_task_id: 'task_owner' }));
+    cache.applyEvent(
+      coord(5, 'reservation.acquired', {
+        path_glob: 'src/**',
+        mode: 'hard',
+        holder_task_id: 'task_owner',
+      }),
+    );
     cache.setStale(false);
     // A stale replay must not regress the cursor or re-add a released reservation.
     cache.applyEvent(coord(2, 'reservation.released', { path_glob: 'src/**', mode: 'hard' }));
@@ -232,7 +264,13 @@ describe('EnforcementCache replay safety', () => {
 
   it('clear() resets the projection for a forced resync', () => {
     const cache = new EnforcementCache();
-    cache.applyEvent(coord(1, 'reservation.acquired', { path_glob: 'src/**', mode: 'hard', holder_task_id: 'task_owner' }));
+    cache.applyEvent(
+      coord(1, 'reservation.acquired', {
+        path_glob: 'src/**',
+        mode: 'hard',
+        holder_task_id: 'task_owner',
+      }),
+    );
     cache.applyEvent(coord(2, 'task.claimed', { version: 0 }, { task_id: 'task_1' }));
     cache.clear();
     expect(cache.getCursor()).toBe(0);

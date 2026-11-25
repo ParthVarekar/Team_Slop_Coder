@@ -1,10 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
-import {
-  canonicalConflictKey,
-  normalizeConflictPath,
-  ConflictKindSchema,
-} from '@weft/protocol';
+import { canonicalConflictKey, normalizeConflictPath, ConflictKindSchema } from '@weft/protocol';
 
 describe('normalizeConflictPath', () => {
   it('converts backslashes and strips leading/trailing separators', () => {

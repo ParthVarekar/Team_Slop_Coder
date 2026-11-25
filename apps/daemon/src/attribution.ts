@@ -14,7 +14,10 @@ import type { ValidationSupervisor } from './validation.js';
 
 const sweeps = metrics.counter('weft_attribution_sweeps_total', 'Attribution sweeps run');
 const revertTests = metrics.counter('weft_attribution_revert_tests_total', 'Revert-tests run');
-const confirmed = metrics.counter('weft_attribution_confirmed_total', 'Suspects confirmed by revert-test');
+const confirmed = metrics.counter(
+  'weft_attribution_confirmed_total',
+  'Suspects confirmed by revert-test',
+);
 
 export type AttributionErrorCode = 'not_found' | 'git';
 
@@ -36,7 +39,14 @@ export interface AttributeInput {
 
 export type RevertTestResult =
   | { confirmed: true; revertOid: string; runId: string; revertedPaths: string[] }
-  | { confirmed: false; reason: 'conflict' | 'error' | 'validation_failed'; conflictedPaths?: string[]; revertOid?: string; runId?: string; state?: string };
+  | {
+      confirmed: false;
+      reason: 'conflict' | 'error' | 'validation_failed';
+      conflictedPaths?: string[];
+      revertOid?: string;
+      runId?: string;
+      state?: string;
+    };
 
 export interface AttributionEngineOptions {
   registry: RepoRegistry;
@@ -60,10 +70,19 @@ export interface AttributionEngineOptions {
 export class AttributionEngine {
   constructor(private readonly options: AttributionEngineOptions) {}
 
-  async buildSuspects(repoId: string, baselineOid: string, head?: string): Promise<SuspectChange[]> {
+  async buildSuspects(
+    repoId: string,
+    baselineOid: string,
+    head?: string,
+  ): Promise<SuspectChange[]> {
     const repo = this.options.registry.get(repoId);
     if (!repo) throw new AttributionError('not_found', `repo ${repoId} not found`);
-    const commits = await logRange(repo.root_path, baselineOid, head ?? 'HEAD', this.options.binary);
+    const commits = await logRange(
+      repo.root_path,
+      baselineOid,
+      head ?? 'HEAD',
+      this.options.binary,
+    );
     const suspects: SuspectChange[] = [];
     for (const commit of commits) {
       const paths = await commitChangedPaths(repo.root_path, commit.oid, this.options.binary);

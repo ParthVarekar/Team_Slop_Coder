@@ -62,7 +62,16 @@ const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : und
 const num = (v: unknown): number | undefined => (typeof v === 'number' ? v : undefined);
 
 /** Input keys worth summarizing; source-bearing keys are deliberately excluded. */
-const INPUT_KEYS = ['filePath', 'file_path', 'path', 'command', 'pattern', 'url', 'query', 'description'];
+const INPUT_KEYS = [
+  'filePath',
+  'file_path',
+  'path',
+  'command',
+  'pattern',
+  'url',
+  'query',
+  'description',
+];
 const SOURCE_KEYS = new Set([
   'content',
   'oldString',
@@ -198,7 +207,8 @@ export class OpenCodeTranslator {
         const model = modelRef(d.model);
         const cwd = locationCwd(d.location, this.ctx.cwd ?? '.');
         this.sessions.set(sessionID, { ...(model ? { model } : {}), cwd });
-        const version = str(d.version) ?? (num(d.version) !== undefined ? String(d.version) : undefined);
+        const version =
+          str(d.version) ?? (num(d.version) !== undefined ? String(d.version) : undefined);
         return [
           {
             ...this.baseFor(sessionID),
@@ -223,10 +233,14 @@ export class OpenCodeTranslator {
       }
 
       case 'session.execution.started':
-        return [{ ...this.baseFor(sessionID), type: 'session.status', payload: { status: 'running' } }];
+        return [
+          { ...this.baseFor(sessionID), type: 'session.status', payload: { status: 'running' } },
+        ];
 
       case 'session.execution.succeeded':
-        return [{ ...this.baseFor(sessionID), type: 'session.status', payload: { status: 'idle' } }];
+        return [
+          { ...this.baseFor(sessionID), type: 'session.status', payload: { status: 'idle' } },
+        ];
 
       case 'session.execution.failed':
         return [
@@ -251,7 +265,9 @@ export class OpenCodeTranslator {
         for (const [id, tool] of this.tools) {
           if (tool.sessionID === sessionID) this.tools.delete(id);
         }
-        return [{ ...this.baseFor(sessionID), type: 'session.ended', payload: { reason: 'completed' } }];
+        return [
+          { ...this.baseFor(sessionID), type: 'session.ended', payload: { reason: 'completed' } },
+        ];
       }
 
       case 'session.tool.input.started': {

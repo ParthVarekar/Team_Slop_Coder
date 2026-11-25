@@ -187,13 +187,18 @@ describe('Codex hook translation', () => {
   it('maps Stop to idle and Interrupt to idle with an interrupted detail', () => {
     expect(
       translateHook(
-        hook('Stop', { turn_id: 'turn_1', stop_hook_active: false, last_assistant_message: 'Done.' }),
+        hook('Stop', {
+          turn_id: 'turn_1',
+          stop_hook_active: false,
+          last_assistant_message: 'Done.',
+        }),
         ctx,
       )[0]?.payload,
     ).toMatchObject({ status: 'idle', detail: 'Done.' });
-    expect(
-      translateHook(hook('Interrupt', { turn_id: 'turn_1' }), ctx)[0]?.payload,
-    ).toMatchObject({ status: 'idle', detail: 'interrupted' });
+    expect(translateHook(hook('Interrupt', { turn_id: 'turn_1' }), ctx)[0]?.payload).toMatchObject({
+      status: 'idle',
+      detail: 'interrupted',
+    });
   });
 
   it('maps the documented SessionEnd example (reason "other") to completed', () => {
@@ -226,7 +231,10 @@ describe('Codex hook translation', () => {
     expect(translateHook(hook('PostCompact', { trigger: 'manual' }), ctx)).toEqual([]);
     expect(translateHook(hook('PreModelRequest', { turn_id: 'turn_1' }), ctx)).toEqual([]);
     expect(
-      translateHook(hook('PostModelRequest', { status: 'completed', token_usage: { total: 10 } }), ctx),
+      translateHook(
+        hook('PostModelRequest', { status: 'completed', token_usage: { total: 10 } }),
+        ctx,
+      ),
     ).toEqual([]);
   });
 
@@ -286,6 +294,10 @@ describe('adapter contract guarantees', () => {
     }
     expect(CAPABILITY_MANIFEST.fidelity).toBe('high');
     // Fail-open guardrail: participates in PreToolUse but is NOT a hard boundary.
-    expect(CAPABILITY_MANIFEST.enforcement).toMatchObject({ preToolUse: true, mode: 'sync', hardBlock: false });
+    expect(CAPABILITY_MANIFEST.enforcement).toMatchObject({
+      preToolUse: true,
+      mode: 'sync',
+      hardBlock: false,
+    });
   });
 });

@@ -10,9 +10,18 @@ import type { Origin } from './tasks-service.js';
 const queued = metrics.counter('weft_server_merge_queued_total', 'Merge queue entries enqueued');
 const merged = metrics.counter('weft_server_merge_merged_total', 'Merge queue entries merged');
 const ejected = metrics.counter('weft_server_merge_ejected_total', 'Merge queue entries ejected');
-const requeued = metrics.counter('weft_server_merge_requeued_total', 'Merge queue entries requeued');
-const leaseAcquired = metrics.counter('weft_server_merge_lease_acquired_total', 'Executor leases acquired');
-const leaseDenied = metrics.counter('weft_server_merge_lease_denied_total', 'Executor lease acquires denied');
+const requeued = metrics.counter(
+  'weft_server_merge_requeued_total',
+  'Merge queue entries requeued',
+);
+const leaseAcquired = metrics.counter(
+  'weft_server_merge_lease_acquired_total',
+  'Executor leases acquired',
+);
+const leaseDenied = metrics.counter(
+  'weft_server_merge_lease_denied_total',
+  'Executor lease acquires denied',
+);
 const unvalidatedBlocked = metrics.counter(
   'weft_server_merge_unvalidated_blocked_total',
   'Advance attempts blocked for lacking passing independent validation',
@@ -192,7 +201,11 @@ export class MergeQueueService {
       const lease = await this.lockLease(client, projectId, repoId);
       const now = Date.now();
       const end = leaseExpiry(lease);
-      if (lease.state === 'held' && lease.holder_device_id === deviceId && (end == null || now < end)) {
+      if (
+        lease.state === 'held' &&
+        lease.holder_device_id === deviceId &&
+        (end == null || now < end)
+      ) {
         const next = this.extendLease(lease, deviceId, now, ttlMs);
         await this.writeLease(client, next);
         await this.audit(client, projectId, origin.actor, 'merge.lease_renewed', repoId);
@@ -206,7 +219,10 @@ export class MergeQueueService {
       await this.writeLease(client, next);
       await this.audit(client, projectId, origin.actor, 'merge.lease_acquired', repoId);
       leaseAcquired.inc();
-      this.logger?.debug({ projectId, repoId, deviceId, epoch: next.lease_epoch }, 'merge executor lease acquired');
+      this.logger?.debug(
+        { projectId, repoId, deviceId, epoch: next.lease_epoch },
+        'merge executor lease acquired',
+      );
       return { status: 'acquired', lease: next };
     });
   }
@@ -233,12 +249,23 @@ export class MergeQueueService {
     });
   }
 
-  async releaseExecutorLease(projectId: string, repoId: string, deviceId: string, origin: Origin): Promise<ExecutorLease> {
+  async releaseExecutorLease(
+    projectId: string,
+    repoId: string,
+    deviceId: string,
+    origin: Origin,
+  ): Promise<ExecutorLease> {
     return withTransaction(this.pool, async (client) => {
       const lease = await this.lockLease(client, projectId, repoId);
       if (lease.holder_device_id !== deviceId)
         throw new MergeQueueError('forbidden', 'only the lease holder may release');
-      const next: ExecutorLease = { ...lease, holder_device_id: null, state: 'idle', expires_at: null, grace_until: null };
+      const next: ExecutorLease = {
+        ...lease,
+        holder_device_id: null,
+        state: 'idle',
+        expires_at: null,
+        grace_until: null,
+      };
       await this.writeLease(client, next);
       await this.audit(client, projectId, origin.actor, 'merge.lease_released', repoId);
       return next;
@@ -256,7 +283,11 @@ export class MergeQueueService {
   // -------------------------------------------------------------------------
   // Queue entries
   // -------------------------------------------------------------------------
-  async enqueue(projectId: string, input: EnqueueMergeInput, origin: Origin): Promise<MergeQueueEntry> {
+  async enqueue(
+    projectId: string,
+    input: EnqueueMergeInput,
+    origin: Origin,
+  ): Promise<MergeQueueEntry> {
     const parsed = EnqueueMergeSchema.safeParse(input);
     if (!parsed.success)
       throw new MergeQueueError('validation', parsed.error.issues.map((i) => i.message).join('; '));
@@ -265,8 +296,12 @@ export class MergeQueueService {
       await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
         `${projectId}:merge-queue:${data.repo_id}`,
       ]);
-      const task = await client.query('SELECT 1 FROM tasks WHERE id=$1 AND project_id=$2', [data.task_id, projectId]);
-      if (task.rows.length === 0) throw new MergeQueueError('not_found', `task ${data.task_id} not found`);
+      const task = await client.query('SELECT 1 FROM tasks WHERE id=$1 AND project_id=$2', [
+        data.task_id,
+        projectId,
+      ]);
+      if (task.rows.length === 0)
+        throw new MergeQueueError('not_found', `task ${data.task_id} not found`);
       const pos = await client.query(
         'SELECT COALESCE(MAX(position), 0) + 1 AS p FROM merge_queue_entries WHERE project_id=$1 AND repo_id=$2',
         [projectId, data.repo_id],
@@ -391,7 +426,8 @@ export class MergeQueueService {
         'SELECT 1 FROM validation_runs WHERE id=$1 AND project_id=$2',
         [validationRunId, projectId],
       );
-      if (run.rows.length === 0) throw new MergeQueueError('not_found', `validation run ${validationRunId} not found`);
+      if (run.rows.length === 0)
+        throw new MergeQueueError('not_found', `validation run ${validationRunId} not found`);
       const next: MergeQueueEntry = { ...entry, validation_run_id: validationRunId };
       await this.writeEntry(client, next);
       await this.audit(client, projectId, origin.actor, 'merge.validation_attached', next.id);
@@ -423,9 +459,15 @@ export class MergeQueueService {
         throw new MergeQueueError('invalid_transition', `cannot advance a ${entry.state} entry`);
       await this.requireLease(client, projectId, entry.repo_id, deviceId, leaseEpoch);
       if (entry.executor_device_id !== deviceId || entry.lease_epoch !== leaseEpoch)
-        throw new MergeQueueError('forbidden', 'stale executor: entry fenced under a different epoch');
+        throw new MergeQueueError(
+          'forbidden',
+          'stale executor: entry fenced under a different epoch',
+        );
       if (!entry.speculative_tree_oid || !entry.validation_run_id)
-        throw new MergeQueueError('evidence_required', 'entry has no speculative tree / validation run');
+        throw new MergeQueueError(
+          'evidence_required',
+          'entry has no speculative tree / validation run',
+        );
       const evidence = await client.query(
         `SELECT 1 FROM validation_runs
           WHERE id=$1 AND project_id=$2 AND state='passed'
@@ -549,7 +591,12 @@ export class MergeQueueService {
   // -------------------------------------------------------------------------
   // Internal helpers (locked client within a transaction)
   // -------------------------------------------------------------------------
-  private extendLease(lease: ExecutorLease, deviceId: string, now: number, ttl: number): ExecutorLease {
+  private extendLease(
+    lease: ExecutorLease,
+    deviceId: string,
+    now: number,
+    ttl: number,
+  ): ExecutorLease {
     return {
       ...lease,
       holder_device_id: deviceId,
@@ -561,7 +608,11 @@ export class MergeQueueService {
     };
   }
 
-  private async lockLease(client: Client, projectId: string, repoId: string): Promise<ExecutorLease> {
+  private async lockLease(
+    client: Client,
+    projectId: string,
+    repoId: string,
+  ): Promise<ExecutorLease> {
     const found = await client.query(
       `SELECT ${LEASE_COLS} FROM merge_queue_leases WHERE project_id=$1 AND repo_id=$2 FOR UPDATE`,
       [projectId, repoId],
@@ -590,14 +641,26 @@ export class MergeQueueService {
       `UPDATE merge_queue_leases SET holder_device_id=$3, lease_epoch=$4, expires_at=$5,
           renewed_at=$6, grace_until=$7, state=$8 WHERE project_id=$1 AND repo_id=$2`,
       [
-        lease.project_id, lease.repo_id, lease.holder_device_id, lease.lease_epoch,
-        lease.expires_at, lease.renewed_at, lease.grace_until, lease.state,
+        lease.project_id,
+        lease.repo_id,
+        lease.holder_device_id,
+        lease.lease_epoch,
+        lease.expires_at,
+        lease.renewed_at,
+        lease.grace_until,
+        lease.state,
       ],
     );
   }
 
   /** Verify the caller holds a live lease at the given fencing epoch. */
-  private async requireLease(client: Client, projectId: string, repoId: string, deviceId: string, leaseEpoch: number): Promise<void> {
+  private async requireLease(
+    client: Client,
+    projectId: string,
+    repoId: string,
+    deviceId: string,
+    leaseEpoch: number,
+  ): Promise<void> {
     const lease = await this.lockLease(client, projectId, repoId);
     if (lease.state !== 'held' || lease.holder_device_id !== deviceId)
       throw new MergeQueueError('lease_required', 'caller does not hold the executor lease');
@@ -608,7 +671,11 @@ export class MergeQueueService {
       throw new MergeQueueError('lease_required', 'executor lease lapsed past grace');
   }
 
-  private async lockEntry(client: Client, projectId: string, entryId: string): Promise<MergeQueueEntry> {
+  private async lockEntry(
+    client: Client,
+    projectId: string,
+    entryId: string,
+  ): Promise<MergeQueueEntry> {
     const res = await client.query(
       `SELECT ${ENTRY_COLS} FROM merge_queue_entries WHERE project_id=$1 AND id=$2 FOR UPDATE`,
       [projectId, entryId],
@@ -618,13 +685,22 @@ export class MergeQueueService {
     return rowToEntry(row);
   }
 
-  private async lockTestingEntry(client: Client, projectId: string, entryId: string, deviceId: string, leaseEpoch: number): Promise<MergeQueueEntry> {
+  private async lockTestingEntry(
+    client: Client,
+    projectId: string,
+    entryId: string,
+    deviceId: string,
+    leaseEpoch: number,
+  ): Promise<MergeQueueEntry> {
     const entry = await this.lockEntry(client, projectId, entryId);
     if (entry.state !== 'testing')
       throw new MergeQueueError('invalid_transition', `entry is ${entry.state}, not testing`);
     await this.requireLease(client, projectId, entry.repo_id, deviceId, leaseEpoch);
     if (entry.executor_device_id !== deviceId || entry.lease_epoch !== leaseEpoch)
-      throw new MergeQueueError('forbidden', 'stale executor: entry fenced under a different epoch');
+      throw new MergeQueueError(
+        'forbidden',
+        'stale executor: entry fenced under a different epoch',
+      );
     return entry;
   }
 
@@ -636,10 +712,25 @@ export class MergeQueueService {
           ejected_reason, executor_device_id, claimant_device_id, lease_epoch, attempts)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
       [
-        e.id, e.project_id, e.repo_id, e.task_id, e.position, e.state, e.branch, e.candidate_oid,
-        e.target_branch, e.speculative_tree_oid, e.base_oid, e.push_precondition_oid,
-        e.validation_run_id, e.merged_oid, e.ejected_reason, e.executor_device_id,
-        e.claimant_device_id, e.lease_epoch, e.attempts,
+        e.id,
+        e.project_id,
+        e.repo_id,
+        e.task_id,
+        e.position,
+        e.state,
+        e.branch,
+        e.candidate_oid,
+        e.target_branch,
+        e.speculative_tree_oid,
+        e.base_oid,
+        e.push_precondition_oid,
+        e.validation_run_id,
+        e.merged_oid,
+        e.ejected_reason,
+        e.executor_device_id,
+        e.claimant_device_id,
+        e.lease_epoch,
+        e.attempts,
       ],
     );
   }
@@ -652,9 +743,22 @@ export class MergeQueueService {
           lease_epoch=$15, attempts=$16, claimant_device_id=$17
         WHERE project_id=$1 AND id=$2`,
       [
-        e.project_id, e.id, e.position, e.state, e.branch, e.candidate_oid, e.target_branch,
-        e.speculative_tree_oid, e.base_oid, e.push_precondition_oid, e.validation_run_id,
-        e.merged_oid, e.ejected_reason, e.executor_device_id, e.lease_epoch, e.attempts,
+        e.project_id,
+        e.id,
+        e.position,
+        e.state,
+        e.branch,
+        e.candidate_oid,
+        e.target_branch,
+        e.speculative_tree_oid,
+        e.base_oid,
+        e.push_precondition_oid,
+        e.validation_run_id,
+        e.merged_oid,
+        e.ejected_reason,
+        e.executor_device_id,
+        e.lease_epoch,
+        e.attempts,
         e.claimant_device_id,
       ],
     );
@@ -679,7 +783,13 @@ export class MergeQueueService {
     });
   }
 
-  private async audit(client: Client, projectId: string, actor: Actor, action: string, subjectId: string): Promise<void> {
+  private async audit(
+    client: Client,
+    projectId: string,
+    actor: Actor,
+    action: string,
+    subjectId: string,
+  ): Promise<void> {
     await recordAudit(clientExecutor(client), {
       projectId,
       actor,

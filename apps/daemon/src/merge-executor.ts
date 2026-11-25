@@ -10,9 +10,18 @@ import {
 import type { RepoRecord, RepoRegistry } from './repos.js';
 import type { ValidationSupervisor } from './validation.js';
 
-const mergesLanded = metrics.counter('weft_merge_executor_landed_total', 'Merges landed by the queue executor');
-const mergesEjected = metrics.counter('weft_merge_executor_ejected_total', 'Queue entries ejected by the executor');
-const pushStale = metrics.counter('weft_merge_executor_push_stale_total', 'CAS pushes rejected as stale');
+const mergesLanded = metrics.counter(
+  'weft_merge_executor_landed_total',
+  'Merges landed by the queue executor',
+);
+const mergesEjected = metrics.counter(
+  'weft_merge_executor_ejected_total',
+  'Queue entries ejected by the executor',
+);
+const pushStale = metrics.counter(
+  'weft_merge_executor_push_stale_total',
+  'CAS pushes rejected as stale',
+);
 
 /** Minimal lease view the executor needs (structurally matches the server lease). */
 export interface ExecutorLeaseView {
@@ -64,9 +73,24 @@ export interface MergeQueueClient {
     deviceId: string,
     leaseEpoch: number,
   ): Promise<MergeEntryView>;
-  attachValidation(entryId: string, validationRunId: string, deviceId: string, leaseEpoch: number): Promise<MergeEntryView>;
-  advance(entryId: string, mergedOid: string, deviceId: string, leaseEpoch: number): Promise<MergeEntryView>;
-  eject(entryId: string, reason: string, deviceId: string, leaseEpoch: number): Promise<MergeEntryView>;
+  attachValidation(
+    entryId: string,
+    validationRunId: string,
+    deviceId: string,
+    leaseEpoch: number,
+  ): Promise<MergeEntryView>;
+  advance(
+    entryId: string,
+    mergedOid: string,
+    deviceId: string,
+    leaseEpoch: number,
+  ): Promise<MergeEntryView>;
+  eject(
+    entryId: string,
+    reason: string,
+    deviceId: string,
+    leaseEpoch: number,
+  ): Promise<MergeEntryView>;
 }
 
 export type MergeExecutorErrorCode = 'not_found' | 'git';
@@ -132,11 +156,19 @@ export class MergeExecutor {
     return this.process(repo, entry, epoch);
   }
 
-  private async process(repo: RepoRecord, entry: MergeEntryView, epoch: number): Promise<MergeOutcome> {
+  private async process(
+    repo: RepoRecord,
+    entry: MergeEntryView,
+    epoch: number,
+  ): Promise<MergeOutcome> {
     const device = this.options.deviceId;
     await fetch(repo.root_path, { prune: true, binary: this.binary });
 
-    const targetTip = await revParse(repo.root_path, `refs/remotes/origin/${entry.target_branch}`, this.binary);
+    const targetTip = await revParse(
+      repo.root_path,
+      `refs/remotes/origin/${entry.target_branch}`,
+      this.binary,
+    );
     if (!targetTip) return this.eject(entry, epoch, 'target_branch_missing');
 
     const candidateTip = await this.resolveCandidate(repo, entry);
@@ -204,7 +236,11 @@ export class MergeExecutor {
       if (oid) return oid;
     }
     if (entry.branch) {
-      const remote = await revParse(repo.root_path, `refs/remotes/origin/${entry.branch}`, this.binary);
+      const remote = await revParse(
+        repo.root_path,
+        `refs/remotes/origin/${entry.branch}`,
+        this.binary,
+      );
       if (remote) return remote;
       const local = await revParse(repo.root_path, `refs/heads/${entry.branch}`, this.binary);
       if (local) return local;

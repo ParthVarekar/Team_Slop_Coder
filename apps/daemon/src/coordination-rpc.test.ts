@@ -23,9 +23,17 @@ function harness(handler: (call: Call) => { status: number; body: unknown }) {
     };
     calls.push(call);
     const { status, body } = handler(call);
-    return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { 'content-type': 'application/json' },
+    });
   }) as typeof fetch;
-  const rpc = new CoordinationRpc({ baseUrl: 'http://team.test/', token: 'tok', projectId: 'proj_1', fetchImpl });
+  const rpc = new CoordinationRpc({
+    baseUrl: 'http://team.test/',
+    token: 'tok',
+    projectId: 'proj_1',
+    fetchImpl,
+  });
   return { rpc, calls };
 }
 
@@ -60,13 +68,25 @@ describe('CoordinationRpc — request shaping', () => {
   });
 
   it('encodes task ids and sends claim CAS fields with a JSON content-type', async () => {
-    const { rpc, calls } = harness(() => ({ status: 200, body: { ok: true, snapshot, provisional: false } }));
-    const result = await rpc.claimTask('task/odd id', { baseVersion: 4, claimant, provisional: true });
+    const { rpc, calls } = harness(() => ({
+      status: 200,
+      body: { ok: true, snapshot, provisional: false },
+    }));
+    const result = await rpc.claimTask('task/odd id', {
+      baseVersion: 4,
+      claimant,
+      provisional: true,
+    });
     expect(result).toMatchObject({ ok: true, provisional: false });
     const call = calls[0]!;
     expect(call.url).toContain('/v1/tasks/task%2Fodd%20id/claim');
     expect(call.headers['content-type']).toBe('application/json');
-    expect(call.body).toMatchObject({ projectId: 'proj_1', baseVersion: 4, claimant, provisional: true });
+    expect(call.body).toMatchObject({
+      projectId: 'proj_1',
+      baseVersion: 4,
+      claimant,
+      provisional: true,
+    });
   });
 });
 
@@ -78,13 +98,24 @@ describe('CoordinationRpc — task reads & claims', () => {
 
   it('surfaces a lost claim with the winner and version', async () => {
     const winner: Actor = { user_id: 'rival', agent: null };
-    const { rpc } = harness(() => ({ status: 200, body: { ok: false, reason: 'version conflict', version: 5, winner_claimant: winner } }));
+    const { rpc } = harness(() => ({
+      status: 200,
+      body: { ok: false, reason: 'version conflict', version: 5, winner_claimant: winner },
+    }));
     const result = await rpc.claimTask('task_1', { baseVersion: 4, claimant });
-    expect(result).toEqual({ ok: false, reason: 'version conflict', version: 5, winner_claimant: winner });
+    expect(result).toEqual({
+      ok: false,
+      reason: 'version conflict',
+      version: 5,
+      winner_claimant: winner,
+    });
   });
 
   it('releases a task and returns the new snapshot', async () => {
-    const { rpc, calls } = harness(() => ({ status: 200, body: { task: { ...snapshot, state: 'ready' } } }));
+    const { rpc, calls } = harness(() => ({
+      status: 200,
+      body: { task: { ...snapshot, state: 'ready' } },
+    }));
     const next = await rpc.releaseTask('task_1', 4);
     expect(next.state).toBe('ready');
     expect(calls[0]?.body).toMatchObject({ baseVersion: 4, projectId: 'proj_1' });
@@ -93,21 +124,47 @@ describe('CoordinationRpc — task reads & claims', () => {
 
 describe('CoordinationRpc — reservations', () => {
   it('acquires a hard lease (201) and maps the reservation', async () => {
-    const { rpc, calls } = harness(() => ({ status: 201, body: { status: 'acquired', reservation } }));
-    const result = await rpc.reserveFiles({ repo_id: 'repo_1', task_id: 'task_1', path_glob: 'src/**', mode: 'hard', ttl_ms: 60_000 });
+    const { rpc, calls } = harness(() => ({
+      status: 201,
+      body: { status: 'acquired', reservation },
+    }));
+    const result = await rpc.reserveFiles({
+      repo_id: 'repo_1',
+      task_id: 'task_1',
+      path_glob: 'src/**',
+      mode: 'hard',
+      ttl_ms: 60_000,
+    });
     expect(result.status).toBe('acquired');
     expect(result.reservation.id).toBe('resv_1');
-    expect(calls[0]?.body).toMatchObject({ repo_id: 'repo_1', task_id: 'task_1', path_glob: 'src/**', mode: 'hard', ttl_ms: 60_000 });
+    expect(calls[0]?.body).toMatchObject({
+      repo_id: 'repo_1',
+      task_id: 'task_1',
+      path_glob: 'src/**',
+      mode: 'hard',
+      ttl_ms: 60_000,
+    });
   });
 
   it('treats 409 as a normal denied outcome, not an error', async () => {
-    const { rpc } = harness(() => ({ status: 409, body: { status: 'denied', reservation, reason: 'held by rival' } }));
-    const result = await rpc.reserveFiles({ repo_id: 'repo_1', task_id: 'task_1', path_glob: 'src/**', mode: 'hard' });
+    const { rpc } = harness(() => ({
+      status: 409,
+      body: { status: 'denied', reservation, reason: 'held by rival' },
+    }));
+    const result = await rpc.reserveFiles({
+      repo_id: 'repo_1',
+      task_id: 'task_1',
+      path_glob: 'src/**',
+      mode: 'hard',
+    });
     expect(result).toMatchObject({ status: 'denied', reason: 'held by rival' });
   });
 
   it('defaults mode to soft and omits absent optional fields', async () => {
-    const { rpc, calls } = harness(() => ({ status: 200, body: { status: 'acquired', reservation: { ...reservation, mode: 'soft' } } }));
+    const { rpc, calls } = harness(() => ({
+      status: 200,
+      body: { status: 'acquired', reservation: { ...reservation, mode: 'soft' } },
+    }));
     await rpc.reserveFiles({ repo_id: 'repo_1', task_id: 'task_1', path_glob: 'docs/**' });
     expect(calls[0]?.body).toMatchObject({ mode: 'soft' });
     expect(calls[0]?.body).not.toHaveProperty('ttl_ms');
@@ -126,7 +183,11 @@ describe('CoordinationRpc — reservations', () => {
 
   it('lists reservations with repo/task/state filters', async () => {
     const { rpc, calls } = harness(() => ({ status: 200, body: { reservations: [reservation] } }));
-    const list = await rpc.listReservations({ repoId: 'repo_1', taskId: 'task_1', state: 'active' });
+    const list = await rpc.listReservations({
+      repoId: 'repo_1',
+      taskId: 'task_1',
+      state: 'active',
+    });
     expect(list).toHaveLength(1);
     const url = new URL(calls[0]!.url);
     expect(url.searchParams.get('repoId')).toBe('repo_1');
@@ -137,7 +198,10 @@ describe('CoordinationRpc — reservations', () => {
 
 describe('CoordinationRpc — error mapping', () => {
   it('throws CoordinationRpcError with status/code/message on a disallowed status', async () => {
-    const { rpc } = harness(() => ({ status: 403, body: { error: 'forbidden', message: 'role lacks claim' } }));
+    const { rpc } = harness(() => ({
+      status: 403,
+      body: { error: 'forbidden', message: 'role lacks claim' },
+    }));
     await expect(rpc.claimTask('task_1', { claimant })).rejects.toMatchObject({
       name: 'CoordinationRpcError',
       status: 403,

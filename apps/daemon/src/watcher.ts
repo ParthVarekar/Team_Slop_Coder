@@ -109,7 +109,8 @@ export interface WatcherDeps {
   /** Backend override (tests inject a fake). */
   backend?: WatchBackend | undefined;
   /** Fired after each reconcile with the dirty change set (drives index invalidation). */
-  onReconcile?: ((repoId: string, changed: string[], deleted: string[]) => void | Promise<void>) | undefined;
+  onReconcile?:
+    ((repoId: string, changed: string[], deleted: string[]) => void | Promise<void>) | undefined;
 }
 
 export interface ReconcileResult {
@@ -158,8 +159,7 @@ export class Watcher {
   private readonly autoWip: boolean;
   private readonly injectedBackend: WatchBackend | undefined;
   private readonly onReconcile:
-    | ((repoId: string, changed: string[], deleted: string[]) => void | Promise<void>)
-    | undefined;
+    ((repoId: string, changed: string[], deleted: string[]) => void | Promise<void>) | undefined;
 
   private backend: WatchBackend | null = null;
   private readonly states = new Map<string, RepoWatchState>();

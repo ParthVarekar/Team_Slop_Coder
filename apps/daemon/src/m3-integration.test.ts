@@ -65,7 +65,12 @@ describe('M3 end-to-end: index -> overlap -> context -> enforcement', () => {
 
   const auth = () => ({ authorization: `Bearer ${secret}` });
 
-  function storedEvent(seq: number, type: string, payload: Record<string, unknown>, repoId: string): StoredEvent {
+  function storedEvent(
+    seq: number,
+    type: string,
+    payload: Record<string, unknown>,
+    repoId: string,
+  ): StoredEvent {
     return {
       v: PROTOCOL_VERSION,
       event_id: ulid(),
@@ -82,7 +87,11 @@ describe('M3 end-to-end: index -> overlap -> context -> enforcement', () => {
     };
   }
 
-  function seedSession(providerSessionId: string, taskId: string | null, providerId: string): string {
+  function seedSession(
+    providerSessionId: string,
+    taskId: string | null,
+    providerId: string,
+  ): string {
     const sessionId = makeId('session');
     daemon.store.upsertSession({
       session_id: sessionId,
@@ -148,7 +157,9 @@ describe('M3 end-to-end: index -> overlap -> context -> enforcement', () => {
 
   it('signature change flows from the symbol index to a bounded agent context and a hard lock', async () => {
     const dir = branchRepo(BASE, {
-      taskA: { 'src/lib.ts': 'export function getUser(id: number): string { return String(id); }\n' },
+      taskA: {
+        'src/lib.ts': 'export function getUser(id: number): string { return String(id); }\n',
+      },
       taskB: {
         'src/caller.ts':
           "import { getUser } from './lib';\nexport function run(): string { return getUser('y'); }\n",
@@ -167,7 +178,9 @@ describe('M3 end-to-end: index -> overlap -> context -> enforcement', () => {
     expect(impact?.name).toBe('getUser');
     expect(impact?.old_signature).toBe('getUser(id: string): string');
     expect(impact?.new_signature).toBe('getUser(id: number): string');
-    expect(impact?.callers.some((c) => c.file_path === 'src/caller.ts' && c.from_symbol === 'run')).toBe(true);
+    expect(
+      impact?.callers.some((c) => c.file_path === 'src/caller.ts' && c.from_symbol === 'run'),
+    ).toBe(true);
     expect(impact?.affected_task_ids).toContain('taskB');
 
     // The sweep emitted conflict.detected cards into the durable pipeline.
@@ -176,7 +189,9 @@ describe('M3 end-to-end: index -> overlap -> context -> enforcement', () => {
       .getEvents({ limit: 1000 })
       .filter((e) => e.type === 'conflict.detected');
     expect(emitted.length).toBeGreaterThan(0);
-    const impactEvent = emitted.find((e) => (e.payload as { kind?: string }).kind === 'signature_impact');
+    const impactEvent = emitted.find(
+      (e) => (e.payload as { kind?: string }).kind === 'signature_impact',
+    );
     expect(impactEvent).toBeDefined();
 
     // M3.5: the coordination mirror projects those cards into the change cache.
@@ -184,7 +199,9 @@ describe('M3 end-to-end: index -> overlap -> context -> enforcement', () => {
     if (!cache) throw new Error('expected team-mode change cache');
     let seq = 1;
     for (const e of emitted) {
-      cache.applyEvent(storedEvent(seq++, e.type, e.payload as Record<string, unknown>, repo.repo_id));
+      cache.applyEvent(
+        storedEvent(seq++, e.type, e.payload as Record<string, unknown>, repo.repo_id),
+      );
     }
     expect(cache.impactsFor('taskB', repo.repo_id)).toHaveLength(1);
 
@@ -225,7 +242,8 @@ describe('M3 end-to-end: index -> overlap -> context -> enforcement', () => {
           task_ids: ['taskA', taskB.task_id],
           evidence: [
             {
-              ...((impactEvent?.payload as { evidence?: Record<string, unknown>[] }).evidence?.[0] ?? {}),
+              ...((impactEvent?.payload as { evidence?: Record<string, unknown>[] })
+                .evidence?.[0] ?? {}),
               affected_task_ids: [taskB.task_id],
             },
           ],
@@ -282,7 +300,9 @@ describe('M3 end-to-end: index -> overlap -> context -> enforcement', () => {
     const codexPre = daemon.store
       .getEvents({ sessionId: codexSessionId })
       .find((e) => e.type === 'tool.pre');
-    expect((codexPre?.payload as { reservation_downgraded?: boolean }).reservation_downgraded).toBe(true);
+    expect((codexPre?.payload as { reservation_downgraded?: boolean }).reservation_downgraded).toBe(
+      true,
+    );
   });
 
   it('keeps the context bounded under a storm of overlapping cards', async () => {
@@ -291,7 +311,11 @@ describe('M3 end-to-end: index -> overlap -> context -> enforcement', () => {
     const cache = daemon.changeCache;
     if (!cache) throw new Error('expected team-mode change cache');
 
-    const task = daemon.tasks.create({ title: 'Storm task', repoId: repo.repo_id, expectedFiles: ['src/lib.ts'] });
+    const task = daemon.tasks.create({
+      title: 'Storm task',
+      repoId: repo.repo_id,
+      expectedFiles: ['src/lib.ts'],
+    });
     let seq = 1;
     for (let i = 0; i < 200; i++) {
       cache.applyEvent(

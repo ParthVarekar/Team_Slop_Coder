@@ -1,7 +1,10 @@
 import { metrics, redact, runCheck, scrubEnv, type Logger } from '@weft/core';
 
 const gatesRun = metrics.counter('weft_contract_gates_run_total', 'Contract gates executed');
-const gatesBlocking = metrics.counter('weft_contract_gates_blocking_total', 'Contract gates reporting breaking changes');
+const gatesBlocking = metrics.counter(
+  'weft_contract_gates_blocking_total',
+  'Contract gates reporting breaking changes',
+);
 
 export type ContractTool = 'oasdiff' | 'buf' | 'squawk' | 'prisma' | 'custom';
 

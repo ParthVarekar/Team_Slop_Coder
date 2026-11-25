@@ -76,8 +76,12 @@ export function Filters() {
       {sessionLabel && (
         <Chip label={`session: ${sessionLabel}`} onRemove={() => setFilter({ session: null })} />
       )}
-      {repoLabel && <Chip label={`repo: ${repoLabel}`} onRemove={() => setFilter({ repo: null })} />}
-      {taskLabel && <Chip label={`task: ${taskLabel}`} onRemove={() => setFilter({ task: null })} />}
+      {repoLabel && (
+        <Chip label={`repo: ${repoLabel}`} onRemove={() => setFilter({ repo: null })} />
+      )}
+      {taskLabel && (
+        <Chip label={`task: ${taskLabel}`} onRemove={() => setFilter({ task: null })} />
+      )}
 
       {hasFilters && (
         <button

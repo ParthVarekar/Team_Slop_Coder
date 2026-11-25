@@ -91,7 +91,11 @@ describe('WorktreeManager provisioning gate', () => {
     const { registry, manager } = harness();
     const repo = await registry.register(makeRepo());
     await expect(
-      manager.provision(repo.repo_id, { taskId: makeId('task'), confirmed: false, provisional: false }),
+      manager.provision(repo.repo_id, {
+        taskId: makeId('task'),
+        confirmed: false,
+        provisional: false,
+      }),
     ).rejects.toMatchObject({ code: 'not_claimed' });
   });
 
@@ -99,7 +103,11 @@ describe('WorktreeManager provisioning gate', () => {
     const { registry, manager, captured } = harness();
     const repo = await registry.register(makeRepo());
     const taskId = makeId('task');
-    const wt = await manager.provision(repo.repo_id, { taskId, confirmed: false, provisional: true });
+    const wt = await manager.provision(repo.repo_id, {
+      taskId,
+      confirmed: false,
+      provisional: true,
+    });
     expect(wt.state).toBe('quarantined');
     expect(wt.quarantine).toBe(true);
     expect(wt.locked).toBe(true);
@@ -114,7 +122,11 @@ describe('WorktreeManager provisioning gate', () => {
     const { registry, manager } = harness();
     const repo = await registry.register(makeRepo());
     const taskId = makeId('task');
-    const wt = await manager.provision(repo.repo_id, { taskId, confirmed: true, provisional: false });
+    const wt = await manager.provision(repo.repo_id, {
+      taskId,
+      confirmed: true,
+      provisional: false,
+    });
     expect(wt.state).toBe('active');
     expect(wt.quarantine).toBe(false);
     const assigned = await manager.assignAgent(wt.worktree_id, 4242);
@@ -151,19 +163,33 @@ describe('WorktreeManager provisioning gate', () => {
     const { registry, manager } = harness();
     const repo = await registry.register(makeRepo());
     const taskId = makeId('task');
-    const q = await manager.provision(repo.repo_id, { taskId, confirmed: false, provisional: true });
+    const q = await manager.provision(repo.repo_id, {
+      taskId,
+      confirmed: false,
+      provisional: true,
+    });
     expect(q.state).toBe('quarantined');
-    const active = await manager.provision(repo.repo_id, { taskId, confirmed: true, provisional: false });
+    const active = await manager.provision(repo.repo_id, {
+      taskId,
+      confirmed: true,
+      provisional: false,
+    });
     expect(active.worktree_id).toBe(q.worktree_id);
     expect(active.state).toBe('active');
     expect(active.quarantine).toBe(false);
-    await expect(manager.assignAgent(active.worktree_id, 7)).resolves.toMatchObject({ owner_pid: 7 });
+    await expect(manager.assignAgent(active.worktree_id, 7)).resolves.toMatchObject({
+      owner_pid: 7,
+    });
   });
 
   it('throws not_found for an unknown repo and invalid_base for a bad ref', async () => {
     const { registry, manager } = harness();
     await expect(
-      manager.provision('repo_missing', { taskId: makeId('task'), confirmed: true, provisional: false }),
+      manager.provision('repo_missing', {
+        taskId: makeId('task'),
+        confirmed: true,
+        provisional: false,
+      }),
     ).rejects.toMatchObject({ code: 'not_found' });
     const repo = await registry.register(makeRepo());
     await expect(
@@ -182,14 +208,22 @@ describe('WorktreeManager branch-per-task + one writer', () => {
     const dir = makeRepo();
     const repo = await registry.register(dir);
     const taskId = makeId('task');
-    const wt = await manager.provision(repo.repo_id, { taskId, confirmed: true, provisional: false });
+    const wt = await manager.provision(repo.repo_id, {
+      taskId,
+      confirmed: true,
+      provisional: false,
+    });
     expect(wt.branch).toBe(`weft/task/${taskId}`);
     expect(wt.base_oid).toBe(repo.head_oid);
     expect(existsSync(wt.path)).toBe(true);
     expect(g(wt.path, ['rev-parse', '--abbrev-ref', 'HEAD'])).toBe(wt.branch);
 
     const branchEvent = captured.find((e) => e.type === 'branch.created');
-    expect(branchEvent?.payload).toMatchObject({ name: wt.branch, head_oid: repo.head_oid, kind: 'task' });
+    expect(branchEvent?.payload).toMatchObject({
+      name: wt.branch,
+      head_oid: repo.head_oid,
+      kind: 'task',
+    });
     const wtEvent = captured.find((e) => e.type === 'worktree.created');
     expect(wtEvent?.payload).toMatchObject({ path: wt.path, branch: wt.branch, task_id: taskId });
 
@@ -235,8 +269,16 @@ describe('WorktreeManager branch-per-task + one writer', () => {
     const repo = await registry.register(dir);
     const t1 = makeId('task');
     const t2 = makeId('task');
-    const a = await manager.provision(repo.repo_id, { taskId: t1, confirmed: true, provisional: false });
-    const b = await manager.provision(repo.repo_id, { taskId: t2, confirmed: true, provisional: false });
+    const a = await manager.provision(repo.repo_id, {
+      taskId: t1,
+      confirmed: true,
+      provisional: false,
+    });
+    const b = await manager.provision(repo.repo_id, {
+      taskId: t2,
+      confirmed: true,
+      provisional: false,
+    });
     expect(a.branch).not.toBe(b.branch);
     expect(a.path).not.toBe(b.path);
     const list = await worktreeList(dir);
@@ -265,9 +307,9 @@ describe('WorktreeManager stale-lock recovery', () => {
     expect(manager.get(wt.worktree_id)?.state).toBe('removed');
     const list = await worktreeList(dir);
     expect(list.some((w) => w.branch === wt.branch)).toBe(false);
-    expect(captured.some((e) => e.type === 'worktree.removed' && e.payload.branch === wt.branch)).toBe(
-      true,
-    );
+    expect(
+      captured.some((e) => e.type === 'worktree.removed' && e.payload.branch === wt.branch),
+    ).toBe(true);
     // The branch survives recovery (work is never destroyed).
     expect(g(dir, ['rev-parse', '--verify', `refs/heads/${wt.branch}`])).toBe(wt.base_oid);
   });
@@ -290,7 +332,11 @@ describe('WorktreeManager device-namespaced auto-WIP', () => {
     const dir = makeRepo();
     const repo = await registry.register(dir);
     const taskId = makeId('task');
-    const wt = await manager.provision(repo.repo_id, { taskId, confirmed: true, provisional: false });
+    const wt = await manager.provision(repo.repo_id, {
+      taskId,
+      confirmed: true,
+      provisional: false,
+    });
     expect(wt.wip_ref).toBe(`refs/wip/${taskId}/${deviceId}`);
     writeFileSync(join(wt.path, 'base.txt'), 'precious worktree work\n');
     const wip = await manager.snapshotWip(wt.worktree_id);
@@ -316,8 +362,16 @@ describe('WorktreeManager device-namespaced auto-WIP', () => {
     const repo = await registry.register(dir);
     const t1 = makeId('task');
     const t2 = makeId('task');
-    const a = await manager.provision(repo.repo_id, { taskId: t1, confirmed: true, provisional: false });
-    const b = await manager.provision(repo.repo_id, { taskId: t2, confirmed: true, provisional: false });
+    const a = await manager.provision(repo.repo_id, {
+      taskId: t1,
+      confirmed: true,
+      provisional: false,
+    });
+    const b = await manager.provision(repo.repo_id, {
+      taskId: t2,
+      confirmed: true,
+      provisional: false,
+    });
     writeFileSync(join(a.path, 'base.txt'), 'work A\n');
     writeFileSync(join(b.path, 'base.txt'), 'work B\n');
     await manager.snapshotWip(a.worktree_id);
@@ -334,8 +388,16 @@ describe('WorktreeManager device-namespaced auto-WIP', () => {
     const taskId = makeId('task');
     const repoA = await a.registry.register(makeRepo());
     const repoB = await b.registry.register(makeRepo());
-    const wtA = await a.manager.provision(repoA.repo_id, { taskId, confirmed: true, provisional: false });
-    const wtB = await b.manager.provision(repoB.repo_id, { taskId, confirmed: true, provisional: false });
+    const wtA = await a.manager.provision(repoA.repo_id, {
+      taskId,
+      confirmed: true,
+      provisional: false,
+    });
+    const wtB = await b.manager.provision(repoB.repo_id, {
+      taskId,
+      confirmed: true,
+      provisional: false,
+    });
     expect(wtA.wip_ref).toBe(`refs/wip/${taskId}/${deviceA}`);
     expect(wtB.wip_ref).toBe(`refs/wip/${taskId}/${deviceB}`);
     expect(wtA.wip_ref).not.toBe(wtB.wip_ref);
@@ -359,7 +421,11 @@ describe('WorktreeManager quarantine discard + removal', () => {
     const dir = makeRepo();
     const repo = await registry.register(dir);
     const taskId = makeId('task');
-    const wt = await manager.provision(repo.repo_id, { taskId, confirmed: false, provisional: true });
+    const wt = await manager.provision(repo.repo_id, {
+      taskId,
+      confirmed: false,
+      provisional: true,
+    });
     writeFileSync(join(wt.path, 'base.txt'), 'provisional work that must survive\n');
 
     const result = await manager.discardQuarantine(taskId);
@@ -393,14 +459,20 @@ describe('WorktreeManager quarantine discard + removal', () => {
     const dir = makeRepo();
     const repo = await registry.register(dir);
     const taskId = makeId('task');
-    const wt = await manager.provision(repo.repo_id, { taskId, confirmed: true, provisional: false });
+    const wt = await manager.provision(repo.repo_id, {
+      taskId,
+      confirmed: true,
+      provisional: false,
+    });
     writeFileSync(join(wt.path, 'base.txt'), 'active work in progress\n');
     const result = await manager.remove(wt.worktree_id);
     expect(result.removed).toBe(true);
     expect(result.wip?.ref).toBe(`refs/wip/${taskId}/${deviceId}`);
     expect(manager.get(wt.worktree_id)?.state).toBe('removed');
     expect(existsSync(wt.path)).toBe(false);
-    expect(g(dir, ['show', `refs/wip/${taskId}/${deviceId}:base.txt`])).toBe('active work in progress');
+    expect(g(dir, ['show', `refs/wip/${taskId}/${deviceId}:base.txt`])).toBe(
+      'active work in progress',
+    );
     expect(g(dir, ['rev-parse', '--verify', `refs/heads/${wt.branch}`])).toBe(wt.base_oid);
   });
 

@@ -76,11 +76,16 @@ describe('OpenCode SSE translation', () => {
 
   it('maps execution lifecycle to running / idle / error / interrupted status', () => {
     const t = new OpenCodeTranslator(ctx);
-    expect(t.translate(frame('session.execution.started'))[0]?.payload).toMatchObject({ status: 'running' });
-    expect(t.translate(frame('session.execution.succeeded'))[0]?.payload).toMatchObject({ status: 'idle' });
+    expect(t.translate(frame('session.execution.started'))[0]?.payload).toMatchObject({
+      status: 'running',
+    });
+    expect(t.translate(frame('session.execution.succeeded'))[0]?.payload).toMatchObject({
+      status: 'idle',
+    });
     expect(
-      t.translate(frame('session.execution.failed', { error: { name: 'APIError', message: 'rate limited' } }))[0]
-        ?.payload,
+      t.translate(
+        frame('session.execution.failed', { error: { name: 'APIError', message: 'rate limited' } }),
+      )[0]?.payload,
     ).toMatchObject({ status: 'idle', detail: 'error: rate limited' });
     expect(
       t.translate(frame('session.execution.interrupted', { reason: 'user' }))[0]?.payload,
@@ -96,7 +101,15 @@ describe('OpenCode SSE translation', () => {
   it('correlates tool name across input.started -> called -> success', () => {
     const t = new OpenCodeTranslator(ctx);
     // input.started carries the name but emits nothing (no complete input yet).
-    expect(t.translate(frame('session.tool.input.started', { id: 'tool_1', name: 'edit', assistantMessageID: 'msg_1' }))).toEqual([]);
+    expect(
+      t.translate(
+        frame('session.tool.input.started', {
+          id: 'tool_1',
+          name: 'edit',
+          assistantMessageID: 'msg_1',
+        }),
+      ),
+    ).toEqual([]);
     const pre = t.translate(
       frame('session.tool.called', {
         id: 'tool_1',
@@ -124,7 +137,11 @@ describe('OpenCode SSE translation', () => {
       }),
     );
     expect(post.map((e) => e.type)).toEqual(['tool.post', 'file.changed']);
-    expect(post[0]?.payload).toMatchObject({ tool_name: 'edit', success: true, tool_use_id: 'tool_1' });
+    expect(post[0]?.payload).toMatchObject({
+      tool_name: 'edit',
+      success: true,
+      tool_use_id: 'tool_1',
+    });
     expect(post[1]?.payload).toMatchObject({
       path: 'src/dashboard/UserCard.tsx',
       change_kind: 'modify',
@@ -135,7 +152,13 @@ describe('OpenCode SSE translation', () => {
   it('derives tool.post + command.executed from a bash tool success', () => {
     const t = new OpenCodeTranslator(ctx);
     t.translate(frame('session.tool.input.started', { id: 'tool_2', name: 'bash' }));
-    t.translate(frame('session.tool.called', { id: 'tool_2', input: { command: 'pnpm test' }, executed: true }));
+    t.translate(
+      frame('session.tool.called', {
+        id: 'tool_2',
+        input: { command: 'pnpm test' },
+        executed: true,
+      }),
+    );
     const events = t.translate(
       frame('session.tool.success', {
         id: 'tool_2',
@@ -145,15 +168,25 @@ describe('OpenCode SSE translation', () => {
       }),
     );
     expect(events.map((e) => e.type)).toEqual(['tool.post', 'command.executed']);
-    expect(events[1]?.payload).toMatchObject({ command_display: 'pnpm test', exit_code: 0, cwd: '/workspace' });
+    expect(events[1]?.payload).toMatchObject({
+      command_display: 'pnpm test',
+      exit_code: 0,
+      cwd: '/workspace',
+    });
   });
 
   it('maps session.tool.failed to tool.failed with the error message', () => {
     const t = new OpenCodeTranslator(ctx);
     t.translate(frame('session.tool.input.started', { id: 'tool_3', name: 'bash' }));
-    t.translate(frame('session.tool.called', { id: 'tool_3', input: { command: 'false' }, executed: true }));
+    t.translate(
+      frame('session.tool.called', { id: 'tool_3', input: { command: 'false' }, executed: true }),
+    );
     const events = t.translate(
-      frame('session.tool.failed', { id: 'tool_3', error: { name: 'ToolError', message: 'boom' }, executed: true }),
+      frame('session.tool.failed', {
+        id: 'tool_3',
+        error: { name: 'ToolError', message: 'boom' },
+        executed: true,
+      }),
     );
     expect(events.map((e) => e.type)).toEqual(['tool.failed']);
     expect(events[0]?.payload).toMatchObject({ tool_name: 'bash', error_class: 'tool_error' });
@@ -162,9 +195,13 @@ describe('OpenCode SSE translation', () => {
 
   it('falls back to unknown tool name when input.started was missed (no fabrication)', () => {
     const t = new OpenCodeTranslator(ctx);
-    const pre = t.translate(frame('session.tool.called', { id: 'orphan', input: { command: 'ls' }, executed: true }));
+    const pre = t.translate(
+      frame('session.tool.called', { id: 'orphan', input: { command: 'ls' }, executed: true }),
+    );
     expect(pre[0]?.payload.tool_name).toBe('unknown');
-    const post = t.translate(frame('session.tool.success', { id: 'orphan', content: [{ type: 'text', text: 'a.ts' }] }));
+    const post = t.translate(
+      frame('session.tool.success', { id: 'orphan', content: [{ type: 'text', text: 'a.ts' }] }),
+    );
     expect(post[0]?.payload.tool_name).toBe('unknown');
     // No bash command derivation without a known name.
     expect(post.map((e) => e.type)).toEqual(['tool.post']);
@@ -174,15 +211,23 @@ describe('OpenCode SSE translation', () => {
     const t = new OpenCodeTranslator(ctx);
     const huge = 'x'.repeat(10_000);
     t.translate(frame('session.tool.input.started', { id: 'big', name: 'read' }));
-    t.translate(frame('session.tool.called', { id: 'big', input: { filePath: 'a.ts' }, executed: true }));
-    const post = t.translate(frame('session.tool.success', { id: 'big', content: [{ type: 'text', text: huge }] }));
+    t.translate(
+      frame('session.tool.called', { id: 'big', input: { filePath: 'a.ts' }, executed: true }),
+    );
+    const post = t.translate(
+      frame('session.tool.success', { id: 'big', content: [{ type: 'text', text: huge }] }),
+    );
     expect(String(post[0]?.payload.output_excerpt).length).toBeLessThanOrEqual(2048);
   });
 
   it('tracks model.selected for subsequent event provenance', () => {
     const t = new OpenCodeTranslator(ctx);
     t.translate(frame('session.created', { location: { directory: '/workspace' } }));
-    expect(t.translate(frame('session.model.selected', { model: { providerID: 'openai', modelID: 'gpt-5' } }))).toEqual([]);
+    expect(
+      t.translate(
+        frame('session.model.selected', { model: { providerID: 'openai', modelID: 'gpt-5' } }),
+      ),
+    ).toEqual([]);
     const status = t.translate(frame('session.execution.started'));
     expect(status[0]?.agent).toMatchObject({ model: 'openai/gpt-5' });
   });
@@ -209,7 +254,9 @@ describe('OpenCode SSE translation', () => {
       'session.archived',
       'session.permissions',
     ]) {
-      expect(t.translate(frame(type, { id: 'x', name: 'edit', text: 'hi', files: ['a.ts'] }))).toEqual([]);
+      expect(
+        t.translate(frame(type, { id: 'x', name: 'edit', text: 'hi', files: ['a.ts'] })),
+      ).toEqual([]);
     }
   });
 
@@ -221,7 +268,9 @@ describe('OpenCode SSE translation', () => {
     const t = new OpenCodeTranslator(ctx);
     expect(() => t.translate({ type: 'session.created' })).toThrowError(AdapterError);
     expect(() => t.translate(null)).toThrowError(AdapterError);
-    expect(() => t.translate(frame('session.created', { sessionID: '' }))).toThrowError(AdapterError);
+    expect(() => t.translate(frame('session.created', { sessionID: '' }))).toThrowError(
+      AdapterError,
+    );
     expect(() => t.translate({ type: '', data: { sessionID: SID } })).toThrowError(AdapterError);
   });
 
@@ -229,10 +278,16 @@ describe('OpenCode SSE translation', () => {
     const t = new OpenCodeTranslator(ctx);
     t.translate(frame('session.created', { location: { directory: '/workspace' } }));
     t.translate(frame('session.tool.input.started', { id: 'tool_9', name: 'edit' }));
-    t.translate(frame('session.tool.called', { id: 'tool_9', input: { filePath: 'a.ts' }, executed: true }));
-    t.translate(frame('session.tool.success', { id: 'tool_9', content: [{ type: 'text', text: 'ok' }] }));
+    t.translate(
+      frame('session.tool.called', { id: 'tool_9', input: { filePath: 'a.ts' }, executed: true }),
+    );
+    t.translate(
+      frame('session.tool.success', { id: 'tool_9', content: [{ type: 'text', text: 'ok' }] }),
+    );
     // A late success for the same id must not resurrect the remembered name.
-    const late = t.translate(frame('session.tool.success', { id: 'tool_9', content: [{ type: 'text', text: 'ok' }] }));
+    const late = t.translate(
+      frame('session.tool.success', { id: 'tool_9', content: [{ type: 'text', text: 'ok' }] }),
+    );
     expect(late[0]?.payload.tool_name).toBe('unknown');
     t.translate(frame('session.deleted'));
     const afterDelete = t.translate(frame('session.execution.started'));
@@ -243,17 +298,65 @@ describe('OpenCode SSE translation', () => {
 describe('adapter contract guarantees', () => {
   // A realistic ordered stream exercising every emitted type.
   const stream: Record<string, unknown>[] = [
-    frame('session.created', { location: { directory: '/workspace' }, model: { providerID: 'anthropic', modelID: 'claude-sonnet-4-5' }, version: '0.15.0' }, 1),
+    frame(
+      'session.created',
+      {
+        location: { directory: '/workspace' },
+        model: { providerID: 'anthropic', modelID: 'claude-sonnet-4-5' },
+        version: '0.15.0',
+      },
+      1,
+    ),
     frame('session.execution.started', {}, 2),
     frame('session.tool.input.started', { id: 't1', name: 'edit', assistantMessageID: 'm1' }, 3),
-    frame('session.tool.called', { id: 't1', assistantMessageID: 'm1', input: { filePath: 'src/a.ts', oldString: 'x', newString: 'y' }, executed: true }, 4),
-    frame('session.tool.success', { id: 't1', assistantMessageID: 'm1', content: [{ type: 'text', text: 'edited' }], executed: true }, 5),
+    frame(
+      'session.tool.called',
+      {
+        id: 't1',
+        assistantMessageID: 'm1',
+        input: { filePath: 'src/a.ts', oldString: 'x', newString: 'y' },
+        executed: true,
+      },
+      4,
+    ),
+    frame(
+      'session.tool.success',
+      {
+        id: 't1',
+        assistantMessageID: 'm1',
+        content: [{ type: 'text', text: 'edited' }],
+        executed: true,
+      },
+      5,
+    ),
     frame('session.tool.input.started', { id: 't2', name: 'bash', assistantMessageID: 'm1' }, 6),
-    frame('session.tool.called', { id: 't2', assistantMessageID: 'm1', input: { command: 'pnpm test' }, executed: true }, 7),
-    frame('session.tool.success', { id: 't2', assistantMessageID: 'm1', content: [{ type: 'text', text: 'ok' }], metadata: { exitCode: 0 }, executed: true }, 8),
+    frame(
+      'session.tool.called',
+      { id: 't2', assistantMessageID: 'm1', input: { command: 'pnpm test' }, executed: true },
+      7,
+    ),
+    frame(
+      'session.tool.success',
+      {
+        id: 't2',
+        assistantMessageID: 'm1',
+        content: [{ type: 'text', text: 'ok' }],
+        metadata: { exitCode: 0 },
+        executed: true,
+      },
+      8,
+    ),
     frame('session.tool.input.started', { id: 't3', name: 'bash', assistantMessageID: 'm1' }, 9),
-    frame('session.tool.called', { id: 't3', assistantMessageID: 'm1', input: { command: 'false' }, executed: true }, 10),
-    frame('session.tool.failed', { id: 't3', assistantMessageID: 'm1', error: { message: 'boom' }, executed: true }, 11),
+    frame(
+      'session.tool.called',
+      { id: 't3', assistantMessageID: 'm1', input: { command: 'false' }, executed: true },
+      10,
+    ),
+    frame(
+      'session.tool.failed',
+      { id: 't3', assistantMessageID: 'm1', error: { message: 'boom' }, executed: true },
+      11,
+    ),
     frame('session.execution.succeeded', {}, 12),
     frame('session.deleted', {}, 13),
   ];
@@ -277,7 +380,11 @@ describe('adapter contract guarantees', () => {
     }
     expect(CAPABILITY_MANIFEST.fidelity).toBe('high');
     // Observe-only SSE: never a hard enforcement boundary.
-    expect(CAPABILITY_MANIFEST.enforcement).toMatchObject({ preToolUse: false, mode: 'none', hardBlock: false });
+    expect(CAPABILITY_MANIFEST.enforcement).toMatchObject({
+      preToolUse: false,
+      mode: 'none',
+      hardBlock: false,
+    });
     expect(CAPABILITY_MANIFEST.transport).toContain('sse');
   });
 });

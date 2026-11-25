@@ -19,7 +19,10 @@ const gitDirs: string[] = [];
 const bugCheck = {
   check_id: 'bugcheck',
   command: process.execPath,
-  args: ['-e', "const fs=require('fs');process.exit(fs.existsSync('app.txt')&&fs.readFileSync('app.txt','utf8').includes('BUG')?1:0)"],
+  args: [
+    '-e',
+    "const fs=require('fs');process.exit(fs.existsSync('app.txt')&&fs.readFileSync('app.txt','utf8').includes('BUG')?1:0)",
+  ],
   selection: 'full',
 };
 
@@ -66,7 +69,11 @@ function makeRegressionRepo(): { repo: string; baselineOid: string; culpritOid: 
 
 beforeEach(async () => {
   dir = mkdtempSync(join(tmpdir(), 'weft-m4api-'));
-  const config = WeftConfigSchema.parse({ dataDir: dir, logLevel: 'fatal', validation: { checks: [bugCheck] } });
+  const config = WeftConfigSchema.parse({
+    dataDir: dir,
+    logLevel: 'fatal',
+    validation: { checks: [bugCheck] },
+  });
   daemon = new Daemon({ config });
   await daemon.start();
   api = createApiServer(daemon);
@@ -102,14 +109,25 @@ describe('daemon M4 API — solo mode merge queue is unavailable', () => {
     const tick = await post(`/v1/repos/${repo.repo_id}/merge/tick`, {});
     expect(tick.statusCode).toBe(409);
     expect(tick.json()).toMatchObject({ error: 'solo_mode' });
-    const enqueue = await post(`/v1/repos/${repo.repo_id}/merge/enqueue`, { task_id: makeId('task'), branch: 'weft/x' });
+    const enqueue = await post(`/v1/repos/${repo.repo_id}/merge/enqueue`, {
+      task_id: makeId('task'),
+      branch: 'weft/x',
+    });
     expect(enqueue.statusCode).toBe(409);
-    const entries = await api.app.inject({ method: 'GET', url: `/v1/repos/${repo.repo_id}/merge/entries`, headers: auth() });
+    const entries = await api.app.inject({
+      method: 'GET',
+      url: `/v1/repos/${repo.repo_id}/merge/entries`,
+      headers: auth(),
+    });
     expect(entries.statusCode).toBe(409);
   });
 
   it('rejects unauthenticated M4 calls', async () => {
-    const res = await api.app.inject({ method: 'POST', url: `/v1/repos/${makeId('repo')}/merge/tick`, payload: {} });
+    const res = await api.app.inject({
+      method: 'POST',
+      url: `/v1/repos/${makeId('repo')}/merge/tick`,
+      payload: {},
+    });
     expect(res.statusCode).toBe(401);
   });
 });
@@ -117,7 +135,9 @@ describe('daemon M4 API — solo mode merge queue is unavailable', () => {
 describe('daemon M4 API — test impact analysis', () => {
   it('selects the tests that import a changed module', async () => {
     const repo = await daemon.registerRepo(makeRepo(TIA_FILES));
-    const res = await post(`/v1/repos/${repo.repo_id}/affected-tests`, { changed_paths: ['src/util.ts'] });
+    const res = await post(`/v1/repos/${repo.repo_id}/affected-tests`, {
+      changed_paths: ['src/util.ts'],
+    });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({
       repo_id: repo.repo_id,
@@ -126,7 +146,9 @@ describe('daemon M4 API — test impact analysis', () => {
   });
 
   it('404s an unknown repo and 400s an empty change set', async () => {
-    const missing = await post(`/v1/repos/${makeId('repo')}/affected-tests`, { changed_paths: ['src/util.ts'] });
+    const missing = await post(`/v1/repos/${makeId('repo')}/affected-tests`, {
+      changed_paths: ['src/util.ts'],
+    });
     expect(missing.statusCode).toBe(404);
     const repo = await daemon.registerRepo(makeRepo(TIA_FILES));
     const bad = await post(`/v1/repos/${repo.repo_id}/affected-tests`, { changed_paths: [] });
@@ -139,12 +161,27 @@ describe('daemon M4 API — contract gates', () => {
     const repo = await daemon.registerRepo(makeRepo({ 'api.yaml': 'openapi: 3.0.0\n' }));
     const res = await post(`/v1/repos/${repo.repo_id}/contract-gates`, {
       gates: [
-        { gate_id: 'pass', tool: 'custom', command: process.execPath, args: ['-e', 'process.exit(0)'] },
-        { gate_id: 'fail', tool: 'custom', command: process.execPath, args: ['-e', 'process.exit(1)'], blocking: true },
+        {
+          gate_id: 'pass',
+          tool: 'custom',
+          command: process.execPath,
+          args: ['-e', 'process.exit(0)'],
+        },
+        {
+          gate_id: 'fail',
+          tool: 'custom',
+          command: process.execPath,
+          args: ['-e', 'process.exit(1)'],
+          blocking: true,
+        },
       ],
     });
     expect(res.statusCode).toBe(200);
-    const body = res.json() as { ok: boolean; blocking: { gate_id: string }[]; passed: { gate_id: string }[] };
+    const body = res.json() as {
+      ok: boolean;
+      blocking: { gate_id: string }[];
+      passed: { gate_id: string }[];
+    };
     expect(body.ok).toBe(false);
     expect(body.blocking.map((r) => r.gate_id)).toEqual(['fail']);
     expect(body.passed.map((r) => r.gate_id)).toEqual(['pass']);
@@ -152,7 +189,14 @@ describe('daemon M4 API — contract gates', () => {
 
   it('404s an unknown repo', async () => {
     const res = await post(`/v1/repos/${makeId('repo')}/contract-gates`, {
-      gates: [{ gate_id: 'x', tool: 'custom', command: process.execPath, args: ['-e', 'process.exit(0)'] }],
+      gates: [
+        {
+          gate_id: 'x',
+          tool: 'custom',
+          command: process.execPath,
+          args: ['-e', 'process.exit(0)'],
+        },
+      ],
     });
     expect(res.statusCode).toBe(404);
   });
@@ -170,7 +214,9 @@ describe('daemon M4 API — attribution + safe revert-test', () => {
     const suspects = (attr.json() as { suspects: { oid: string }[] }).suspects;
     expect(suspects[0]?.oid).toBe(culpritOid);
 
-    const revert = await post(`/v1/repos/${registered.repo_id}/revert-test`, { suspect_oid: culpritOid });
+    const revert = await post(`/v1/repos/${registered.repo_id}/revert-test`, {
+      suspect_oid: culpritOid,
+    });
     expect(revert.statusCode).toBe(200);
     const body = revert.json() as { confirmed: boolean; revertOid?: string };
     expect(body.confirmed).toBe(true);

@@ -198,7 +198,12 @@ describe('createAutoWip', () => {
 });
 
 /** Branch `name` off `start`, write `files`, and commit. Returns the new oid. */
-function branchWith(repo: string, name: string, start: string, files: Record<string, string>): string {
+function branchWith(
+  repo: string,
+  name: string,
+  start: string,
+  files: Record<string, string>,
+): string {
   g(repo, ['checkout', '-q', '-b', name, start]);
   for (const [path, content] of Object.entries(files)) writeFileSync(join(repo, path), content);
   g(repo, ['add', '-A']);
@@ -452,7 +457,15 @@ describe('fetch + pushWithPrecondition (origin CAS)', () => {
     g(work, ['commit', '-qm', 'next']);
     const next = g(work, ['rev-parse', 'HEAD']);
     // Land next legitimately (origin/main now = next).
-    expect((await pushWithPrecondition(work, { source: 'HEAD', destination: 'main', expectedOldOid: base })).ok).toBe(true);
+    expect(
+      (
+        await pushWithPrecondition(work, {
+          source: 'HEAD',
+          destination: 'main',
+          expectedOldOid: base,
+        })
+      ).ok,
+    ).toBe(true);
 
     writeFileSync(join(work, 'third.txt'), 'third\n');
     g(work, ['add', '-A']);

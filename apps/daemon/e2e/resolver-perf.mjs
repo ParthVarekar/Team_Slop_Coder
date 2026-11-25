@@ -34,10 +34,17 @@ try {
   const genMs = performance.now() - tGen;
 
   const tResolve = performance.now();
-  const result = await client.resolve(dir, { filePath: 'src/mod0.ts', name: 'fn0', kind: 'function' });
+  const result = await client.resolve(dir, {
+    filePath: 'src/mod0.ts',
+    name: 'fn0',
+    kind: 'function',
+  });
   const resolveMs = performance.now() - tResolve;
   assert.ok(result.references.length >= 1, 'expected at least the fn0 definition');
-  assert.ok(resolveMs <= RESOLVE_SANITY_MS, `first resolve ${resolveMs.toFixed(0)}ms exceeds sanity gate`);
+  assert.ok(
+    resolveMs <= RESOLVE_SANITY_MS,
+    `first resolve ${resolveMs.toFixed(0)}ms exceeds sanity gate`,
+  );
 
   // Exercise the warm program across the repo (early, middle, late files).
   for (const i of [1, 2, 3, Math.floor(FILE_COUNT / 2), FILE_COUNT - 1]) {

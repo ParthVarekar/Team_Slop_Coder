@@ -22,7 +22,12 @@ const SWEEP_GATE_MS = 100;
 const FULL_SANITY_MS = 4000;
 
 const git = (cwd, args) =>
-  execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true, maxBuffer: 256 * 1024 * 1024 });
+  execFileSync('git', args, {
+    cwd,
+    encoding: 'utf8',
+    windowsHide: true,
+    maxBuffer: 256 * 1024 * 1024,
+  });
 
 const dir = mkdtempSync(join(tmpdir(), 'weft-overlap-storm-'));
 const db = openSqlite(':memory:');
@@ -63,7 +68,10 @@ try {
     join(dir, 'src', 'caller.ts'),
     "import { fn0 } from './mod0';\nexport function call(): number { return fn0(1); }\n",
   );
-  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'storm-fixture', version: '0.0.0' }));
+  writeFileSync(
+    join(dir, 'package.json'),
+    JSON.stringify({ name: 'storm-fixture', version: '0.0.0' }),
+  );
   git(dir, ['init', '-q', '-b', 'main']);
   git(dir, ['config', 'user.name', 'Perf']);
   git(dir, ['config', 'user.email', 'perf@example.com']);
@@ -95,10 +103,15 @@ try {
   const full = await overlap.sweep(repo.repo_id, tasks);
   const fullMs = performance.now() - tFull;
   assert.ok(full.overlaps.length > 0, 'expected symbol overlaps in the storm');
-  assert.ok(fullMs <= FULL_SANITY_MS, `full sweep ${fullMs.toFixed(0)}ms exceeds sanity ${FULL_SANITY_MS}ms`);
+  assert.ok(
+    fullMs <= FULL_SANITY_MS,
+    `full sweep ${fullMs.toFixed(0)}ms exceeds sanity ${FULL_SANITY_MS}ms`,
+  );
 
   // No duplicate cards: every emitted conflict key is unique within the sweep.
-  const keys = events.filter((e) => e.type === 'conflict.detected').map((e) => e.payload.canonical_key);
+  const keys = events
+    .filter((e) => e.type === 'conflict.detected')
+    .map((e) => e.payload.canonical_key);
   assert.equal(new Set(keys).size, keys.length, 'duplicate conflict cards emitted');
   const emittedAfterFull = events.length;
 
@@ -106,7 +119,10 @@ try {
   const tIdle = performance.now();
   const idle = await overlap.sweep(repo.repo_id, tasks);
   const idleMs = performance.now() - tIdle;
-  assert.ok(idleMs <= SWEEP_GATE_MS, `idle incremental sweep ${idleMs.toFixed(1)}ms exceeds ${SWEEP_GATE_MS}ms gate`);
+  assert.ok(
+    idleMs <= SWEEP_GATE_MS,
+    `idle incremental sweep ${idleMs.toFixed(1)}ms exceeds ${SWEEP_GATE_MS}ms gate`,
+  );
   assert.equal(idle.emitted, 0, 'idle sweep re-emitted conflicts');
   assert.equal(idle.indexed_branches, 0, 'idle sweep recomputed branches');
   assert.equal(idle.cached_branches, TASKS, 'idle sweep did not reuse all branches');
@@ -123,7 +139,10 @@ try {
   const tOne = performance.now();
   const one = await overlap.sweep(repo.repo_id, tasks);
   const oneMs = performance.now() - tOne;
-  assert.ok(oneMs <= SWEEP_GATE_MS, `single-branch incremental sweep ${oneMs.toFixed(1)}ms exceeds ${SWEEP_GATE_MS}ms gate`);
+  assert.ok(
+    oneMs <= SWEEP_GATE_MS,
+    `single-branch incremental sweep ${oneMs.toFixed(1)}ms exceeds ${SWEEP_GATE_MS}ms gate`,
+  );
   assert.equal(one.indexed_branches, 1, 'expected exactly one branch recomputed');
   assert.equal(one.cached_branches, TASKS - 1, 'expected remaining branches cached');
 

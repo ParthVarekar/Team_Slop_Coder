@@ -85,7 +85,13 @@ const sampleChecks = [
 describe('ValidationCache keying, TTL, and quarantine', () => {
   it('serves a cached pass for the exact key and misses on fingerprint/hash mismatch', () => {
     const cache = new ValidationCache(freshDb());
-    cache.put({ ...KEY, repoId: 'r', treeOid: 't'.repeat(40), state: 'passed', checks: sampleChecks });
+    cache.put({
+      ...KEY,
+      repoId: 'r',
+      treeOid: 't'.repeat(40),
+      state: 'passed',
+      checks: sampleChecks,
+    });
     expect(cache.get(KEY)?.state).toBe('passed');
     expect(cache.get({ ...KEY, toolchainFingerprint: 'other' })).toBeNull();
     expect(cache.get({ ...KEY, inputHash: 'other' })).toBeNull();
@@ -94,7 +100,13 @@ describe('ValidationCache keying, TTL, and quarantine', () => {
   it('expires entries at the TTL boundary', () => {
     let clock = 1_000_000;
     const cache = new ValidationCache(freshDb(), { ttlMs: 5000, now: () => clock });
-    cache.put({ ...KEY, repoId: 'r', treeOid: 't'.repeat(40), state: 'passed', checks: sampleChecks });
+    cache.put({
+      ...KEY,
+      repoId: 'r',
+      treeOid: 't'.repeat(40),
+      state: 'passed',
+      checks: sampleChecks,
+    });
     clock += 4999;
     expect(cache.get(KEY)).not.toBeNull();
     clock += 1;
@@ -103,7 +115,13 @@ describe('ValidationCache keying, TTL, and quarantine', () => {
 
   it('quarantine invalidates a cached pass and writes a tombstone when absent', () => {
     const cache = new ValidationCache(freshDb());
-    cache.put({ ...KEY, repoId: 'r', treeOid: 't'.repeat(40), state: 'passed', checks: sampleChecks });
+    cache.put({
+      ...KEY,
+      repoId: 'r',
+      treeOid: 't'.repeat(40),
+      state: 'passed',
+      checks: sampleChecks,
+    });
     cache.quarantine(KEY);
     expect(cache.get(KEY)).toBeNull();
     const absent = { inputHash: 'h2', toolchainFingerprint: 'fp2' };
@@ -113,7 +131,13 @@ describe('ValidationCache keying, TTL, and quarantine', () => {
 
   it('never serves a non-passed result', () => {
     const cache = new ValidationCache(freshDb());
-    cache.put({ ...KEY, repoId: 'r', treeOid: 't'.repeat(40), state: 'failed', checks: sampleChecks });
+    cache.put({
+      ...KEY,
+      repoId: 'r',
+      treeOid: 't'.repeat(40),
+      state: 'failed',
+      checks: sampleChecks,
+    });
     expect(cache.get(KEY)).toBeNull();
   });
 });
@@ -142,7 +166,12 @@ function harness(opts: HarnessOpts) {
     worktreeRoot,
     registry,
     actor: { user_id: makeId('user'), agent: null },
-    validation: { timeoutMs: 5000, outputCapBytes: 1_048_576, excerptBytes: 4096, checks: opts.checks },
+    validation: {
+      timeoutMs: 5000,
+      outputCapBytes: 1_048_576,
+      excerptBytes: 4096,
+      checks: opts.checks,
+    },
     cache,
     ...(opts.fingerprint ? { toolchainFingerprint: opts.fingerprint } : {}),
     emit: (draft) => {
@@ -167,7 +196,10 @@ function flagCheck(flagPath: string): ValidationCheckConfig {
   return {
     check_id: 'flaky',
     command: process.execPath,
-    args: ['-e', `process.exit(require('fs').readFileSync(${JSON.stringify(flagPath)},'utf8').trim()==='pass'?0:1)`],
+    args: [
+      '-e',
+      `process.exit(require('fs').readFileSync(${JSON.stringify(flagPath)},'utf8').trim()==='pass'?0:1)`,
+    ],
     selection: 'full',
   };
 }
@@ -240,7 +272,10 @@ describe('ValidationSupervisor cache integration', () => {
   it('flake quarantine invalidates a cached pass after an identical input fails', async () => {
     const flag = join(scratch(), 'flag.txt');
     writeFileSync(flag, 'pass');
-    const { registry, supervisor, cache } = harness({ checks: [flagCheck(flag)], fingerprint: 'fp-flaky' });
+    const { registry, supervisor, cache } = harness({
+      checks: [flagCheck(flag)],
+      fingerprint: 'fp-flaky',
+    });
     const repo = await registry.register(makeRepo());
 
     const pass = await supervisor.run(repo.repo_id, { trigger: 'task' });

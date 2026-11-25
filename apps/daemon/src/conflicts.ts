@@ -1,10 +1,4 @@
-import {
-  diffNameOnly,
-  mergeTreeWriteTree,
-  metrics,
-  revParse,
-  type Logger,
-} from '@weft/core';
+import { diffNameOnly, mergeTreeWriteTree, metrics, revParse, type Logger } from '@weft/core';
 import {
   canonicalConflictKey,
   normalizeConflictPath,
@@ -16,8 +10,14 @@ import type { EventDraft } from './events.js';
 import type { EnqueueResult } from './pipeline.js';
 import type { RepoRecord, RepoRegistry } from './repos.js';
 
-const textualTotal = metrics.counter('weft_conflicts_textual_total', 'Textual merge-tree conflicts detected');
-const overlapTotal = metrics.counter('weft_conflicts_overlap_total', 'Pairwise file overlaps detected');
+const textualTotal = metrics.counter(
+  'weft_conflicts_textual_total',
+  'Textual merge-tree conflicts detected',
+);
+const overlapTotal = metrics.counter(
+  'weft_conflicts_overlap_total',
+  'Pairwise file overlaps detected',
+);
 
 export interface TaskBranch {
   taskId: string;

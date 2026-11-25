@@ -42,8 +42,14 @@ export interface EnforcementSnapshot {
   conflicts: Conflict[];
 }
 
-const applied = metrics.counter('weft_enforcement_events_applied_total', 'Coordination events projected');
-const blocked = metrics.counter('weft_enforcement_checks_blocked_total', 'Reservation checks blocked');
+const applied = metrics.counter(
+  'weft_enforcement_events_applied_total',
+  'Coordination events projected',
+);
+const blocked = metrics.counter(
+  'weft_enforcement_checks_blocked_total',
+  'Reservation checks blocked',
+);
 
 const regexCache = new Map<string, RegExp>();
 
@@ -150,7 +156,12 @@ export class EnforcementCache {
         const pathGlob = str(payload.path_glob);
         const key = pathGlob ? reservationKey(e, pathGlob) : null;
         const existing = key ? this.reservations.get(key) : undefined;
-        if (existing) this.reservations.set(existing.key, { ...existing, state: 'released', seq: e.global_seq });
+        if (existing)
+          this.reservations.set(existing.key, {
+            ...existing,
+            state: 'released',
+            seq: e.global_seq,
+          });
         break;
       }
       case 'reservation.denied':
@@ -170,7 +181,8 @@ export class EnforcementCache {
       case 'task.released': {
         if (!e.task_id) break;
         const existing = this.claims.get(e.task_id);
-        if (existing) this.claims.set(e.task_id, { ...existing, state: 'released', seq: e.global_seq });
+        if (existing)
+          this.claims.set(e.task_id, { ...existing, state: 'released', seq: e.global_seq });
         break;
       }
       case 'conflict.detected': {

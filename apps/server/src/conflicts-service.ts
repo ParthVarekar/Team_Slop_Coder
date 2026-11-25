@@ -24,7 +24,10 @@ const created = metrics.counter('weft_server_conflicts_created_total', 'Conflict
 const reopened = metrics.counter('weft_server_conflicts_reopened_total', 'Conflict cards reopened');
 const resolved = metrics.counter('weft_server_conflicts_resolved_total', 'Conflicts resolved');
 const dismissed = metrics.counter('weft_server_conflicts_dismissed_total', 'Conflicts dismissed');
-const evidenceAdded = metrics.counter('weft_server_conflicts_evidence_total', 'Evidence records unioned');
+const evidenceAdded = metrics.counter(
+  'weft_server_conflicts_evidence_total',
+  'Evidence records unioned',
+);
 
 const SEVERITY_RANK: Record<ConflictSeverity, number> = { info: 0, warning: 1, blocking: 2 };
 
@@ -160,10 +163,25 @@ async function insertCard(client: Client, c: ConflictSnapshot): Promise<void> {
         reopen_count, created_at, last_detected_at, resolved_at)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
     [
-      c.id, c.project_id, c.canonical_key, c.repo_id, c.kind, JSON.stringify(c.task_ids),
-      c.branch_a, c.branch_b, JSON.stringify(c.paths), JSON.stringify(c.symbol_ids),
-      JSON.stringify(c.evidence), c.detection_epoch, c.severity, c.state, c.resolved_by,
-      c.reopen_count, c.created_at, c.last_detected_at, c.resolved_at,
+      c.id,
+      c.project_id,
+      c.canonical_key,
+      c.repo_id,
+      c.kind,
+      JSON.stringify(c.task_ids),
+      c.branch_a,
+      c.branch_b,
+      JSON.stringify(c.paths),
+      JSON.stringify(c.symbol_ids),
+      JSON.stringify(c.evidence),
+      c.detection_epoch,
+      c.severity,
+      c.state,
+      c.resolved_by,
+      c.reopen_count,
+      c.created_at,
+      c.last_detected_at,
+      c.resolved_at,
     ],
   );
 }
@@ -175,8 +193,17 @@ async function updateCard(client: Client, c: ConflictSnapshot): Promise<void> {
         resolved_at=$11
       WHERE id=$1`,
     [
-      c.id, c.branch_a, c.branch_b, JSON.stringify(c.evidence), c.detection_epoch,
-      c.severity, c.state, c.resolved_by, c.reopen_count, c.last_detected_at, c.resolved_at,
+      c.id,
+      c.branch_a,
+      c.branch_b,
+      JSON.stringify(c.evidence),
+      c.detection_epoch,
+      c.severity,
+      c.state,
+      c.resolved_by,
+      c.reopen_count,
+      c.last_detected_at,
+      c.resolved_at,
     ],
   );
 }
@@ -254,7 +281,11 @@ export class ConflictService implements ConflictProjection {
     private readonly logger?: Logger,
   ) {}
 
-  async detect(projectId: string, input: DetectConflictInput, origin: Origin): Promise<ConflictSnapshot> {
+  async detect(
+    projectId: string,
+    input: DetectConflictInput,
+    origin: Origin,
+  ): Promise<ConflictSnapshot> {
     const parsed = DetectConflictSchema.safeParse(input);
     if (!parsed.success)
       throw new ConflictError('validation', parsed.error.issues.map((i) => i.message).join('; '));
@@ -326,19 +357,32 @@ export class ConflictService implements ConflictProjection {
         resolved_at: null,
       };
       await insertCard(client, card);
-      await appendHistory(client, card.id, 'detected', origin.actor, {
-        detection_epoch: card.detection_epoch,
-        detector_device_id: origin.deviceId,
-        evidence_count: evidence.length,
-      }, card.detection_epoch);
+      await appendHistory(
+        client,
+        card.id,
+        'detected',
+        origin.actor,
+        {
+          detection_epoch: card.detection_epoch,
+          detector_device_id: origin.deviceId,
+          evidence_count: evidence.length,
+        },
+        card.detection_epoch,
+      );
       await recordAudit(clientExecutor(client), {
-        projectId, actor: origin.actor, action: 'conflict.detected',
-        subject: `conflict:${card.id}`, afterHash: cardDigest(card),
+        projectId,
+        actor: origin.actor,
+        action: 'conflict.detected',
+        subject: `conflict:${card.id}`,
+        afterHash: cardDigest(card),
       });
       await this.emitDetected(client, projectId, card, origin.actor, false);
       created.inc();
       evidenceAdded.inc(evidence.length);
-      this.logger?.debug({ conflictId: card.id, kind: card.kind, projectId }, 'conflict card minted');
+      this.logger?.debug(
+        { conflictId: card.id, kind: card.kind, projectId },
+        'conflict card minted',
+      );
       return card;
     }
 
@@ -365,26 +409,40 @@ export class ConflictService implements ConflictProjection {
         branch_b: card.branch_b ?? parsed.branch_b ?? null,
       };
       await updateCard(client, next);
-      await appendHistory(client, card.id, 'reopened', origin.actor, {
-        previous_state: card.state,
-        previous_epoch: card.detection_epoch,
-        new_epoch: epoch,
-        detector_device_id: origin.deviceId,
-        evidence_added: added.length,
-      }, epoch);
+      await appendHistory(
+        client,
+        card.id,
+        'reopened',
+        origin.actor,
+        {
+          previous_state: card.state,
+          previous_epoch: card.detection_epoch,
+          new_epoch: epoch,
+          detector_device_id: origin.deviceId,
+          evidence_added: added.length,
+        },
+        epoch,
+      );
       await recordAudit(clientExecutor(client), {
-        projectId, actor: origin.actor, action: 'conflict.reopened',
-        subject: `conflict:${card.id}`, afterHash: cardDigest(next),
+        projectId,
+        actor: origin.actor,
+        action: 'conflict.reopened',
+        subject: `conflict:${card.id}`,
+        afterHash: cardDigest(next),
       });
       await this.emitDetected(client, projectId, next, origin.actor, true);
       reopened.inc();
       evidenceAdded.inc(added.length);
-      this.logger?.info({ conflictId: card.id, epoch, projectId }, 'conflict reopened in later epoch');
+      this.logger?.info(
+        { conflictId: card.id, epoch, projectId },
+        'conflict reopened in later epoch',
+      );
       return next;
     }
 
     // Same-epoch re-detection: union evidence, never flap state or re-emit.
-    const changed = added.length > 0 || epoch !== card.detection_epoch || severity !== card.severity;
+    const changed =
+      added.length > 0 || epoch !== card.detection_epoch || severity !== card.severity;
     if (!changed) return card;
     const next: ConflictSnapshot = {
       ...card,
@@ -397,11 +455,18 @@ export class ConflictService implements ConflictProjection {
     };
     await updateCard(client, next);
     if (added.length > 0) {
-      await appendHistory(client, card.id, 'evidence', origin.actor, {
-        detection_epoch: epoch,
-        detector_device_id: origin.deviceId,
-        evidence_added: added.length,
-      }, epoch);
+      await appendHistory(
+        client,
+        card.id,
+        'evidence',
+        origin.actor,
+        {
+          detection_epoch: epoch,
+          detector_device_id: origin.deviceId,
+          evidence_added: added.length,
+        },
+        epoch,
+      );
       evidenceAdded.inc(added.length);
     }
     return next;
@@ -518,13 +583,23 @@ export class ConflictService implements ConflictProjection {
         resolved_at: now,
       };
       await updateCard(client, next);
-      await appendHistory(client, conflictId, target, origin.actor, {
-        previous_state: card.state,
-        ...(note ? { note } : {}),
-      }, card.detection_epoch);
+      await appendHistory(
+        client,
+        conflictId,
+        target,
+        origin.actor,
+        {
+          previous_state: card.state,
+          ...(note ? { note } : {}),
+        },
+        card.detection_epoch,
+      );
       await recordAudit(clientExecutor(client), {
-        projectId, actor: origin.actor, action: `conflict.${target}`,
-        subject: `conflict:${conflictId}`, afterHash: cardDigest(next),
+        projectId,
+        actor: origin.actor,
+        action: `conflict.${target}`,
+        subject: `conflict:${conflictId}`,
+        afterHash: cardDigest(next),
       });
       await appendCoordinationEvent(client, {
         projectId,
@@ -546,7 +621,11 @@ export class ConflictService implements ConflictProjection {
     });
   }
 
-  private async lockCard(client: Client, conflictId: string, projectId: string): Promise<ConflictSnapshot> {
+  private async lockCard(
+    client: Client,
+    conflictId: string,
+    projectId: string,
+  ): Promise<ConflictSnapshot> {
     const res = await client.query(
       `SELECT ${CARD_COLS} FROM conflicts WHERE id=$1 AND project_id=$2 FOR UPDATE`,
       [conflictId, projectId],
@@ -558,8 +637,10 @@ export class ConflictService implements ConflictProjection {
 
   private async requireCard(conflictId: string, projectId: string): Promise<void> {
     const res = await this.pool.query('SELECT 1 FROM conflicts WHERE id=$1 AND project_id=$2', [
-      conflictId, projectId,
+      conflictId,
+      projectId,
     ]);
-    if (res.rows.length === 0) throw new ConflictError('not_found', `conflict ${conflictId} not found`);
+    if (res.rows.length === 0)
+      throw new ConflictError('not_found', `conflict ${conflictId} not found`);
   }
 }

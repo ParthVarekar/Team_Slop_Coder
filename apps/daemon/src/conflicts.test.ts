@@ -55,7 +55,12 @@ function harness(deviceId = makeId('device')) {
 }
 
 /** Create a branch off start, write files, commit; return to main afterwards. */
-function taskBranch(repo: string, branch: string, start: string, files: Record<string, string>): void {
+function taskBranch(
+  repo: string,
+  branch: string,
+  start: string,
+  files: Record<string, string>,
+): void {
   g(repo, ['checkout', '-q', '-b', branch, start]);
   for (const [path, content] of Object.entries(files)) writeFileSync(join(repo, path), content);
   g(repo, ['add', '-A']);
@@ -95,7 +100,11 @@ describe('ConflictDetector textual gate', () => {
     const result = await detector.detect(repo.repo_id, [{ taskId: 'T1', branch: 'weft/task/T1' }], {
       baseRef: 'main',
     });
-    expect(result.gate[0]).toMatchObject({ clean: false, conflicted_paths: ['base.txt'], error: null });
+    expect(result.gate[0]).toMatchObject({
+      clean: false,
+      conflicted_paths: ['base.txt'],
+      error: null,
+    });
     expect(result.conflicts).toHaveLength(1);
     expect(result.conflicts[0]).toMatchObject({
       kind: 'textual',
@@ -126,7 +135,9 @@ describe('ConflictDetector textual gate', () => {
   it('records a gate error for an unresolvable branch without throwing', async () => {
     const { registry, detector } = harness();
     const repo = await registry.register(makeRepo());
-    const result = await detector.detect(repo.repo_id, [{ taskId: 'T1', branch: 'no-such-branch' }]);
+    const result = await detector.detect(repo.repo_id, [
+      { taskId: 'T1', branch: 'no-such-branch' },
+    ]);
     expect(result.gate[0]?.error).toBeTruthy();
     expect(result.conflicts).toHaveLength(0);
   });
@@ -205,8 +216,12 @@ describe('ConflictDetector canonical identity + epoch', () => {
     const rb = await b.detector.detect(repoB.repo_id, tasks, { baseRef: 'main', epoch: 1 });
     expect(ra.conflicts[0]?.canonical_key).toBe(rb.conflicts[0]?.canonical_key);
     // Evidence is device-attributed so the server can union both observations.
-    const ea = a.captured.find((e) => e.type === 'conflict.detected')?.payload['evidence'] as Record<string, unknown>[];
-    const eb = b.captured.find((e) => e.type === 'conflict.detected')?.payload['evidence'] as Record<string, unknown>[];
+    const ea = a.captured.find((e) => e.type === 'conflict.detected')?.payload[
+      'evidence'
+    ] as Record<string, unknown>[];
+    const eb = b.captured.find((e) => e.type === 'conflict.detected')?.payload[
+      'evidence'
+    ] as Record<string, unknown>[];
     expect(ea[0]?.['detector_device_id']).toBe(a.deviceId);
     expect(eb[0]?.['detector_device_id']).toBe(b.deviceId);
   });

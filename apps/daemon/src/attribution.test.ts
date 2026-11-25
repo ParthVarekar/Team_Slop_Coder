@@ -51,7 +51,10 @@ function commitFile(repo: string, file: string, content: string, message: string
 const bugCheck: ValidationCheckConfig = {
   check_id: 'unit',
   command: process.execPath,
-  args: ['-e', "const fs=require('fs'); process.exit(fs.readFileSync('fileA.txt','utf8').includes('BUG')?1:0)"],
+  args: [
+    '-e',
+    "const fs=require('fs'); process.exit(fs.readFileSync('fileA.txt','utf8').includes('BUG')?1:0)",
+  ],
   selection: 'full',
 };
 

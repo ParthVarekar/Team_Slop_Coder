@@ -48,7 +48,10 @@ export interface TaskEvent {
  * state/claim events carry the transition. claim_rejected and dependency edges
  * do not mutate the snapshot (rejection is a notice; edges surface via READY).
  */
-export function applyTaskEvent(snapshot: TaskSnapshot | null, event: TaskEvent): TaskSnapshot | null {
+export function applyTaskEvent(
+  snapshot: TaskSnapshot | null,
+  event: TaskEvent,
+): TaskSnapshot | null {
   const p = event.payload;
   switch (event.type) {
     case 'task.created':
@@ -57,7 +60,8 @@ export function applyTaskEvent(snapshot: TaskSnapshot | null, event: TaskEvent):
       if (!snapshot) return null;
       const values = (p.values ?? {}) as Partial<TaskSnapshot>;
       const next = { ...snapshot, ...values, version: event.version } as TaskSnapshot;
-      if ('edit_conflict' in p) next.edit_conflict = (p.edit_conflict as EditConflict | null) ?? null;
+      if ('edit_conflict' in p)
+        next.edit_conflict = (p.edit_conflict as EditConflict | null) ?? null;
       return next;
     }
     case 'task.state_changed': {
@@ -70,7 +74,11 @@ export function applyTaskEvent(snapshot: TaskSnapshot | null, event: TaskEvent):
     }
     case 'task.released': {
       if (!snapshot) return null;
-      return { ...snapshot, state: (p.to as TaskState | undefined) ?? 'ready', version: event.version };
+      return {
+        ...snapshot,
+        state: (p.to as TaskState | undefined) ?? 'ready',
+        version: event.version,
+      };
     }
     default:
       return snapshot;

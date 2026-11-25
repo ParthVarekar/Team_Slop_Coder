@@ -61,7 +61,10 @@ function groupLabel(group: StreamGroup): string {
  * category and sub-key within a bounded time window. Pure and order-stable —
  * identical input always yields identical groups (ids derive from event_ids).
  */
-export function groupEvents(events: WeftEvent[], windowMs: number = GROUP_WINDOW_MS): StreamGroup[] {
+export function groupEvents(
+  events: WeftEvent[],
+  windowMs: number = GROUP_WINDOW_MS,
+): StreamGroup[] {
   const groups: StreamGroup[] = [];
   for (const e of events) {
     const current = groups[groups.length - 1];

@@ -34,7 +34,10 @@ export interface ChangeCacheSnapshot {
   progress: ContextProgress[];
 }
 
-const applied = metrics.counter('weft_change_cache_events_applied_total', 'Concurrent-change events projected');
+const applied = metrics.counter(
+  'weft_change_cache_events_applied_total',
+  'Concurrent-change events projected',
+);
 
 function str(value: unknown): string | null {
   return typeof value === 'string' ? value : null;
@@ -199,7 +202,10 @@ export class ChangeCache {
   overlapsFor(taskId: string, repoId?: string): ContextOverlap[] {
     return [...this.overlaps.values()]
       .filter(
-        (o) => o.state === 'open' && o.task_ids.includes(taskId) && (repoId == null || o.repo_id === repoId),
+        (o) =>
+          o.state === 'open' &&
+          o.task_ids.includes(taskId) &&
+          (repoId == null || o.repo_id === repoId),
       )
       .sort((a, b) => (a.canonical_key < b.canonical_key ? -1 : 1));
   }

@@ -102,12 +102,26 @@ describe('server-authoritative conflicts (real Postgres 16)', () => {
     const deviceB = makeId('device');
     const res = await ingest.ingestBatch([
       detectionEnvelope({
-        deviceId: deviceA, repoId, taskIds, paths, kind: 'file_overlap', severity: 'warning',
-        evidence: [{ kind: 'diff-overlap', detector_device_id: deviceA, branch_a: 'a', branch_b: 'b' }],
+        deviceId: deviceA,
+        repoId,
+        taskIds,
+        paths,
+        kind: 'file_overlap',
+        severity: 'warning',
+        evidence: [
+          { kind: 'diff-overlap', detector_device_id: deviceA, branch_a: 'a', branch_b: 'b' },
+        ],
       }),
       detectionEnvelope({
-        deviceId: deviceB, repoId, taskIds, paths, kind: 'file_overlap', severity: 'warning',
-        evidence: [{ kind: 'diff-overlap', detector_device_id: deviceB, branch_a: 'a', branch_b: 'b' }],
+        deviceId: deviceB,
+        repoId,
+        taskIds,
+        paths,
+        kind: 'file_overlap',
+        severity: 'warning',
+        evidence: [
+          { kind: 'diff-overlap', detector_device_id: deviceB, branch_a: 'a', branch_b: 'b' },
+        ],
       }),
     ]);
     expect(res.rejected).toHaveLength(0);
@@ -122,7 +136,9 @@ describe('server-authoritative conflicts (real Postgres 16)', () => {
     expect(card.reopen_count).toBe(0);
     // Evidence is unioned append-only and attributed to both detectors.
     expect(card.evidence).toHaveLength(2);
-    expect(card.evidence.map((e) => e.detector_device_id).sort()).toEqual([deviceA, deviceB].sort());
+    expect(card.evidence.map((e) => e.detector_device_id).sort()).toEqual(
+      [deviceA, deviceB].sort(),
+    );
     // Exactly one server fan-out (the create); the second detection only unioned.
     expect(await serverEmitted(repoId)).toBe(1);
   });
@@ -168,7 +184,13 @@ describe('server-authoritative conflicts (real Postgres 16)', () => {
 
     // Same epoch must NOT reopen — it only unions evidence, preserving resolution.
     await ingest.ingestBatch([
-      detectionEnvelope({ repoId, taskIds, paths, epoch: 1, evidence: [{ kind: 'merge-tree', detector_device_id: 'dev_same' }] }),
+      detectionEnvelope({
+        repoId,
+        taskIds,
+        paths,
+        epoch: 1,
+        evidence: [{ kind: 'merge-tree', detector_device_id: 'dev_same' }],
+      }),
     ]);
     const still = await conflicts.get(card.id, world.projectA);
     expect(still?.state).toBe('resolved');
@@ -177,7 +199,13 @@ describe('server-authoritative conflicts (real Postgres 16)', () => {
 
     // A strictly later epoch reopens once and records the prior state.
     await ingest.ingestBatch([
-      detectionEnvelope({ repoId, taskIds, paths, epoch: 2, evidence: [{ kind: 'merge-tree', detector_device_id: 'dev_later' }] }),
+      detectionEnvelope({
+        repoId,
+        taskIds,
+        paths,
+        epoch: 2,
+        evidence: [{ kind: 'merge-tree', detector_device_id: 'dev_later' }],
+      }),
     ]);
     const reopened = await conflicts.get(card.id, world.projectA);
     expect(reopened?.state).toBe('open');
@@ -190,7 +218,11 @@ describe('server-authoritative conflicts (real Postgres 16)', () => {
     const history = await conflicts.history(card.id, world.projectA);
     const reopenEvent = history.find((h) => h.type === 'reopened');
     expect(reopenEvent).toBeTruthy();
-    expect(reopenEvent?.payload).toMatchObject({ previous_state: 'resolved', previous_epoch: 1, new_epoch: 2 });
+    expect(reopenEvent?.payload).toMatchObject({
+      previous_state: 'resolved',
+      previous_epoch: 1,
+      new_epoch: 2,
+    });
     expect(reopenEvent?.detection_epoch).toBe(2);
     expect(history.map((h) => h.type)).toContain('resolved');
   });
@@ -214,8 +246,12 @@ describe('server-authoritative conflicts (real Postgres 16)', () => {
     const repoId = makeId('repo');
     const taskIds = [makeId('task')];
     const paths = ['src/iso.ts'];
-    await ingest.ingestBatch([detectionEnvelope({ projectId: world.projectA, repoId, taskIds, paths })]);
-    await ingest.ingestBatch([detectionEnvelope({ projectId: world.projectB, repoId, taskIds, paths })]);
+    await ingest.ingestBatch([
+      detectionEnvelope({ projectId: world.projectA, repoId, taskIds, paths }),
+    ]);
+    await ingest.ingestBatch([
+      detectionEnvelope({ projectId: world.projectB, repoId, taskIds, paths }),
+    ]);
     const a = await conflicts.list(world.projectA, { repoId });
     const b = await conflicts.list(world.projectB, { repoId });
     expect(a).toHaveLength(1);
@@ -237,7 +273,9 @@ describe('server-authoritative conflicts (real Postgres 16)', () => {
     const r2 = await conflicts.resolve(card.id, world.projectA, origin, 'note again');
     expect(r2.state).toBe('resolved');
     expect(r2.resolved_at).toBe(r1.resolved_at); // second call is a no-op
-    expect((await conflicts.history(card.id, world.projectA)).filter((h) => h.type === 'resolved')).toHaveLength(1);
+    expect(
+      (await conflicts.history(card.id, world.projectA)).filter((h) => h.type === 'resolved'),
+    ).toHaveLength(1);
     expect(await serverEmitted(repoId, 'conflict.resolved')).toBe(1);
 
     const dismissRepo = makeId('repo');
@@ -261,7 +299,11 @@ describe('server-authoritative conflicts (real Postgres 16)', () => {
         conflicts.detect(
           world.projectA,
           {
-            repo_id: repoId, kind: 'textual', task_ids: taskIds, paths, severity: 'blocking',
+            repo_id: repoId,
+            kind: 'textual',
+            task_ids: taskIds,
+            paths,
+            severity: 'blocking',
             evidence: [{ kind: 'merge-tree', detector_device_id: d }],
           },
           { actor: { user_id: world.memberUser, agent: null }, deviceId: d },
@@ -279,8 +321,12 @@ describe('server-authoritative conflicts (real Postgres 16)', () => {
   it('detect RPC validates input and reports not_found for unknown cards', async () => {
     const repoId = makeId('repo');
     const input: DetectConflictInput = {
-      repo_id: repoId, kind: 'textual', task_ids: [makeId('task')], paths: ['src/r.ts'],
-      severity: 'blocking', evidence: [{ kind: 'merge-tree' }],
+      repo_id: repoId,
+      kind: 'textual',
+      task_ids: [makeId('task')],
+      paths: ['src/r.ts'],
+      severity: 'blocking',
+      evidence: [{ kind: 'merge-tree' }],
     };
     const card = await conflicts.detect(world.projectA, input, origin);
     expect(card.state).toBe('open');
@@ -292,9 +338,9 @@ describe('server-authoritative conflicts (real Postgres 16)', () => {
     await expect(
       conflicts.resolve(makeId('conflict'), world.projectA, origin),
     ).rejects.toMatchObject({ code: 'not_found' });
-    await expect(
-      conflicts.history(makeId('conflict'), world.projectA),
-    ).rejects.toMatchObject({ code: 'not_found' });
+    await expect(conflicts.history(makeId('conflict'), world.projectA)).rejects.toMatchObject({
+      code: 'not_found',
+    });
   });
 
   it('property: any number of devices detecting one logical conflict yields exactly one card', async () => {
@@ -309,7 +355,11 @@ describe('server-authoritative conflicts (real Postgres 16)', () => {
           const devices = Array.from({ length: deviceCount }, () => makeId('device'));
           const envs = devices.map((d) =>
             detectionEnvelope({
-              deviceId: d, repoId, taskIds, paths, kind,
+              deviceId: d,
+              repoId,
+              taskIds,
+              paths,
+              kind,
               severity: kind === 'textual' ? 'blocking' : 'warning',
               evidence: [{ kind: 'detector', detector_device_id: d }],
             }),

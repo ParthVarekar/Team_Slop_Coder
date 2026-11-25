@@ -79,9 +79,7 @@ async function teardown() {
       /* already down */
     }
   }
-  await Promise.all(
-    daemons.map((d) => Promise.race([d.exited, sleep(8000)]).catch(() => {})),
-  );
+  await Promise.all(daemons.map((d) => Promise.race([d.exited, sleep(8000)]).catch(() => {})));
   for (const d of daemons) {
     try {
       d.proc.kill();
@@ -140,7 +138,8 @@ async function main() {
   assert.ok(existsSync(serverDist), 'server dist missing — run pnpm build first');
   assert.ok(existsSync(cliDist), 'daemon dist missing — run pnpm build first');
 
-  const EmbeddedPostgres = (await import(pathToFileURL(req.resolve('embedded-postgres')).href)).default;
+  const EmbeddedPostgres = (await import(pathToFileURL(req.resolve('embedded-postgres')).href))
+    .default;
   const { createServer } = await import(pathToFileURL(serverDist).href);
   const { makeId, ulid, PROTOCOL_VERSION } = await import(
     pathToFileURL(join(root, 'packages', 'protocol', 'dist', 'index.js')).href
@@ -165,7 +164,14 @@ async function main() {
   const port = await freePort();
   const adminSecret = 'twodaemon-admin-secret';
   server = await createServer(
-    { dataDir: join(temp, 'server'), host: '127.0.0.1', port, databaseUrl, logLevel: 'fatal', corsOrigin: '*' },
+    {
+      dataDir: join(temp, 'server'),
+      host: '127.0.0.1',
+      port,
+      databaseUrl,
+      logLevel: 'fatal',
+      corsOrigin: '*',
+    },
     { adminSecret, onShutdown: () => {} },
   );
   const baseUrl = await server.listen();
@@ -181,19 +187,65 @@ async function main() {
   const marcus = makeId('user');
   const devicePriya = makeId('device');
   const deviceMarcus = makeId('device');
-  await pool.query('INSERT INTO organizations (id, name, slug) VALUES ($1,$2,$3)', [orgId, 'Dogfood Org', `org-${orgId}`]);
-  await pool.query('INSERT INTO teams (id, org_id, name, slug) VALUES ($1,$2,$3,$4)', [teamId, orgId, 'Dogfood Team', `team-${teamId}`]);
-  await pool.query('INSERT INTO projects (id, team_id, name, slug) VALUES ($1,$2,$3,$4)', [projectId, teamId, 'Dogfood Project', `proj-${projectId}`]);
-  await pool.query('INSERT INTO users (id, org_id, email, display_name) VALUES ($1,$2,$3,$4)', [priya, orgId, 'priya@dogfood.local', 'Priya']);
-  await pool.query('INSERT INTO users (id, org_id, email, display_name) VALUES ($1,$2,$3,$4)', [marcus, orgId, 'marcus@dogfood.local', 'Marcus']);
-  await pool.query('INSERT INTO project_members (project_id, user_id, role) VALUES ($1,$2,$3)', [projectId, priya, 'member']);
-  await pool.query('INSERT INTO project_members (project_id, user_id, role) VALUES ($1,$2,$3)', [projectId, marcus, 'member']);
-  await pool.query('INSERT INTO devices (id, user_id, hostname, os) VALUES ($1,$2,$3,$4)', [devicePriya, priya, 'priya-host', 'win32']);
-  await pool.query('INSERT INTO devices (id, user_id, hostname, os) VALUES ($1,$2,$3,$4)', [deviceMarcus, marcus, 'marcus-host', 'darwin']);
+  await pool.query('INSERT INTO organizations (id, name, slug) VALUES ($1,$2,$3)', [
+    orgId,
+    'Dogfood Org',
+    `org-${orgId}`,
+  ]);
+  await pool.query('INSERT INTO teams (id, org_id, name, slug) VALUES ($1,$2,$3,$4)', [
+    teamId,
+    orgId,
+    'Dogfood Team',
+    `team-${teamId}`,
+  ]);
+  await pool.query('INSERT INTO projects (id, team_id, name, slug) VALUES ($1,$2,$3,$4)', [
+    projectId,
+    teamId,
+    'Dogfood Project',
+    `proj-${projectId}`,
+  ]);
+  await pool.query('INSERT INTO users (id, org_id, email, display_name) VALUES ($1,$2,$3,$4)', [
+    priya,
+    orgId,
+    'priya@dogfood.local',
+    'Priya',
+  ]);
+  await pool.query('INSERT INTO users (id, org_id, email, display_name) VALUES ($1,$2,$3,$4)', [
+    marcus,
+    orgId,
+    'marcus@dogfood.local',
+    'Marcus',
+  ]);
+  await pool.query('INSERT INTO project_members (project_id, user_id, role) VALUES ($1,$2,$3)', [
+    projectId,
+    priya,
+    'member',
+  ]);
+  await pool.query('INSERT INTO project_members (project_id, user_id, role) VALUES ($1,$2,$3)', [
+    projectId,
+    marcus,
+    'member',
+  ]);
+  await pool.query('INSERT INTO devices (id, user_id, hostname, os) VALUES ($1,$2,$3,$4)', [
+    devicePriya,
+    priya,
+    'priya-host',
+    'win32',
+  ]);
+  await pool.query('INSERT INTO devices (id, user_id, hostname, os) VALUES ($1,$2,$3,$4)', [
+    deviceMarcus,
+    marcus,
+    'marcus-host',
+    'darwin',
+  ]);
 
   const admin = { authorization: `Bearer ${adminSecret}`, 'content-type': 'application/json' };
   const ingest = (events) =>
-    fetch(`${baseUrl}/v1/ingest`, { method: 'POST', headers: admin, body: JSON.stringify({ events }) });
+    fetch(`${baseUrl}/v1/ingest`, {
+      method: 'POST',
+      headers: admin,
+      body: JSON.stringify({ events }),
+    });
   const event = (type, actor, extra = {}) => ({
     v: PROTOCOL_VERSION,
     event_id: ulid(),
@@ -213,9 +265,12 @@ async function main() {
       body: JSON.stringify({ projectId, ...body }),
     });
   const get = (path, token) =>
-    fetch(`${baseUrl}${path}${path.includes('?') ? '&' : '?'}projectId=${encodeURIComponent(projectId)}`, {
-      headers: { authorization: `Bearer ${token}` },
-    });
+    fetch(
+      `${baseUrl}${path}${path.includes('?') ? '&' : '?'}projectId=${encodeURIComponent(projectId)}`,
+      {
+        headers: { authorization: `Bearer ${token}` },
+      },
+    );
   const issueToken = async (userId) => {
     const res = await fetch(`${baseUrl}/v1/admin/tokens`, {
       method: 'POST',
@@ -227,8 +282,14 @@ async function main() {
   };
   const priyaToken = await issueToken(priya);
   const marcusToken = await issueToken(marcus);
-  const priyaAgent = { user_id: priya, agent: { provider: 'Claude Code', model: 'opus', adapter: 'hooks@1.4.0' } };
-  const marcusAgent = { user_id: marcus, agent: { provider: 'Codex', model: 'gpt-5', adapter: 'hooks@1.4.0' } };
+  const priyaAgent = {
+    user_id: priya,
+    agent: { provider: 'Claude Code', model: 'opus', adapter: 'hooks@1.4.0' },
+  };
+  const marcusAgent = {
+    user_id: marcus,
+    agent: { provider: 'Codex', model: 'gpt-5', adapter: 'hooks@1.4.0' },
+  };
 
   // Scratch git fixture: own initial commit, clean tree. Never the user's repo.
   const repoDir = join(temp, 'repo');
@@ -247,16 +308,26 @@ async function main() {
   const dirB = join(temp, 'daemonB');
   const cfgA = join(temp, 'cfgA.json');
   const cfgB = join(temp, 'cfgB.json');
-  writeFileSync(cfgA, JSON.stringify({
-    mode: 'team', dataDir: dirA, logLevel: 'fatal',
-    server: { url: baseUrl, token: priyaToken, projectId, deviceId: devicePriya },
-    hooks: { host: '127.0.0.1', port: portA },
-  }));
-  writeFileSync(cfgB, JSON.stringify({
-    mode: 'team', dataDir: dirB, logLevel: 'fatal',
-    server: { url: baseUrl, token: marcusToken, projectId, deviceId: deviceMarcus },
-    hooks: { host: '127.0.0.1', port: portB },
-  }));
+  writeFileSync(
+    cfgA,
+    JSON.stringify({
+      mode: 'team',
+      dataDir: dirA,
+      logLevel: 'fatal',
+      server: { url: baseUrl, token: priyaToken, projectId, deviceId: devicePriya },
+      hooks: { host: '127.0.0.1', port: portA },
+    }),
+  );
+  writeFileSync(
+    cfgB,
+    JSON.stringify({
+      mode: 'team',
+      dataDir: dirB,
+      logLevel: 'fatal',
+      server: { url: baseUrl, token: marcusToken, projectId, deviceId: deviceMarcus },
+      hooks: { host: '127.0.0.1', port: portB },
+    }),
+  );
   const A = spawnDaemon('priya', dirA, cfgA, portA);
   const B = spawnDaemon('marcus', dirB, cfgB, portB);
 
@@ -269,7 +340,9 @@ async function main() {
     d.secret = JSON.parse(readFileSync(join(d.dataDir, 'identity.json'), 'utf8')).hook_secret;
     const boot = await (await fetch(`${d.baseUrl}/v1/bootstrap`)).json();
     assert.equal(boot.project_id, projectId);
-    console.log(`✓ daemon ${d.name} up (pid ${d.proc.pid}, device ${boot.device_id}, mode ${boot.mode})`);
+    console.log(
+      `✓ daemon ${d.name} up (pid ${d.proc.pid}, device ${boot.device_id}, mode ${boot.mode})`,
+    );
   }
   assert.equal((await (await dGet(A, '/healthz')).json()).device_id, devicePriya);
   assert.equal((await (await dGet(B, '/healthz')).json()).device_id, deviceMarcus);
@@ -292,12 +365,50 @@ async function main() {
     assert.equal(r.status, 202, `codex hook rejected: ${JSON.stringify(j)}`);
   };
   const tShip = performance.now();
-  await hookA({ hook_event_name: 'SessionStart', session_id: 'sess-priya', cwd: repoDir, model: 'claude-sonnet-4', source: 'startup' });
-  await hookA({ hook_event_name: 'UserPromptSubmit', session_id: 'sess-priya', prompt: 'Implement the shared module' });
-  await hookA({ hook_event_name: 'PreToolUse', session_id: 'sess-priya', tool_name: 'Write', tool_use_id: 'w1', tool_input: { file_path: 'src/shared.ts' } });
-  await hookA({ hook_event_name: 'PostToolUse', session_id: 'sess-priya', tool_name: 'Write', tool_use_id: 'w1', tool_input: { file_path: 'src/shared.ts' }, tool_response: { success: true } });
-  await hookB({ hook_event_name: 'SessionStart', session_id: 'sess-marcus', cwd: repoDir, model: 'gpt-5', source: 'startup' });
-  await hookB({ hook_event_name: 'PreToolUse', session_id: 'sess-marcus', tool_name: 'apply_patch', tool_use_id: 'p1', tool_input: { command: '*** Update File: src/shared.ts\n@@\n-export const shared = 1;\n+export const shared = 2;\n' } });
+  await hookA({
+    hook_event_name: 'SessionStart',
+    session_id: 'sess-priya',
+    cwd: repoDir,
+    model: 'claude-sonnet-4',
+    source: 'startup',
+  });
+  await hookA({
+    hook_event_name: 'UserPromptSubmit',
+    session_id: 'sess-priya',
+    prompt: 'Implement the shared module',
+  });
+  await hookA({
+    hook_event_name: 'PreToolUse',
+    session_id: 'sess-priya',
+    tool_name: 'Write',
+    tool_use_id: 'w1',
+    tool_input: { file_path: 'src/shared.ts' },
+  });
+  await hookA({
+    hook_event_name: 'PostToolUse',
+    session_id: 'sess-priya',
+    tool_name: 'Write',
+    tool_use_id: 'w1',
+    tool_input: { file_path: 'src/shared.ts' },
+    tool_response: { success: true },
+  });
+  await hookB({
+    hook_event_name: 'SessionStart',
+    session_id: 'sess-marcus',
+    cwd: repoDir,
+    model: 'gpt-5',
+    source: 'startup',
+  });
+  await hookB({
+    hook_event_name: 'PreToolUse',
+    session_id: 'sess-marcus',
+    tool_name: 'apply_patch',
+    tool_use_id: 'p1',
+    tool_input: {
+      command:
+        '*** Update File: src/shared.ts\n@@\n-export const shared = 1;\n+export const shared = 2;\n',
+    },
+  });
 
   // Modify the working tree and force a reconciliation -> watcher file.changed.
   writeFileSync(join(repoDir, 'src', 'shared.ts'), 'export const shared = 2;\n');
@@ -317,8 +428,13 @@ async function main() {
   );
   assert.ok(providers.has('claude-code'), 'expected a claude-code session on the server');
   assert.ok(providers.has('codex'), 'expected a codex session on the server');
-  assert.ok(visible.some((e) => e.type === 'file.changed' && e.device_id === devicePriya), 'expected watcher file.changed from daemon A');
-  console.log(`✓ shared visibility: both daemons shipped to server (claude-code + codex + watcher file.changed) in ${shipMs.toFixed(0)}ms`);
+  assert.ok(
+    visible.some((e) => e.type === 'file.changed' && e.device_id === devicePriya),
+    'expected watcher file.changed from daemon A',
+  );
+  console.log(
+    `✓ shared visibility: both daemons shipped to server (claude-code + codex + watcher file.changed) in ${shipMs.toFixed(0)}ms`,
+  );
 
   // --- 2. coordination propagation: server reservation reaches both caches ---
   const holderTask = makeId('task');
@@ -340,18 +456,31 @@ async function main() {
   }
   const propMs = performance.now() - tProp;
   assert.ok(propMs <= 5000, `coordination propagation ${propMs.toFixed(0)}ms too slow`);
-  console.log(`✓ coordination propagation: server hard reservation blocked BOTH daemons' enforcement in ${propMs.toFixed(0)}ms`);
+  console.log(
+    `✓ coordination propagation: server hard reservation blocked BOTH daemons' enforcement in ${propMs.toFixed(0)}ms`,
+  );
 
   // --- 3. no double-claims: one winner, both task caches fold the state ------
   const created = await post('/v1/tasks', priyaToken, { title: 'Dogfood shared task', repoId });
   assert.equal(created.status, 201);
   const task = (await created.json()).task;
-  const ready = await post(`/v1/tasks/${task.id}/transition`, priyaToken, { baseVersion: 0, to: 'ready' });
+  const ready = await post(`/v1/tasks/${task.id}/transition`, priyaToken, {
+    baseVersion: 0,
+    to: 'ready',
+  });
   assert.equal(ready.status, 200);
   const readyVersion = (await ready.json()).task.version;
   const [rA, rB] = await Promise.all([
-    post(`/v1/tasks/${task.id}/claim`, priyaToken, { baseVersion: readyVersion, claimant: priyaAgent, deviceId: devicePriya }),
-    post(`/v1/tasks/${task.id}/claim`, marcusToken, { baseVersion: readyVersion, claimant: marcusAgent, deviceId: deviceMarcus }),
+    post(`/v1/tasks/${task.id}/claim`, priyaToken, {
+      baseVersion: readyVersion,
+      claimant: priyaAgent,
+      deviceId: devicePriya,
+    }),
+    post(`/v1/tasks/${task.id}/claim`, marcusToken, {
+      baseVersion: readyVersion,
+      claimant: marcusAgent,
+      deviceId: deviceMarcus,
+    }),
   ]);
   const bA = await rA.json();
   const bB = await rB.json();
@@ -367,7 +496,9 @@ async function main() {
       return t && t.state === 'claimed';
     }, `${d.name} task cache reflects authoritative claim`);
   }
-  console.log('✓ no double-claims: exactly one winner; BOTH daemon task caches folded the claimed state');
+  console.log(
+    '✓ no double-claims: exactly one winner; BOTH daemon task caches folded the claimed state',
+  );
 
   // --- 4. outbox drain: both durable outboxes reach zero ---------------------
   for (const d of [A, B]) {
