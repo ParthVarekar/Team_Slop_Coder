@@ -21,6 +21,12 @@ function tableNames(db: ReturnType<typeof openSqlite>): string[] {
 }
 
 describe('SQLite migrations', () => {
+  it('bounds the native page cache for writable databases', () => {
+    const db = openSqlite(':memory:');
+    expect(db.pragma('cache_size', { simple: true })).toBe(-4096);
+    db.close();
+  });
+
   it('applies the initial schema and is idempotent', () => {
     const db = openSqlite(':memory:');
     const first = migrate(db, DAEMON_MIGRATIONS);

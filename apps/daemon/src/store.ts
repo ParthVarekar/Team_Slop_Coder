@@ -186,15 +186,22 @@ function insertRowsReturningEventIds(
   return inserted;
 }
 
-function receiptEventIds(db: SqliteDatabase, eventIds: readonly string[]): Set<string> {
+function receiptEventIds(
+  db: SqliteDatabase,
+  statements: Map<number, Statement>,
+  eventIds: readonly string[],
+): Set<string> {
   const compacted = new Set<string>();
   for (let offset = 0; offset < eventIds.length; offset += 500) {
     const chunk = eventIds.slice(offset, offset + 500);
-    const rows = db
-      .prepare(
+    let statement = statements.get(chunk.length);
+    if (!statement) {
+      statement = db.prepare(
         `SELECT event_id FROM event_receipts WHERE event_id IN (${chunk.map(() => '?').join(',')})`,
-      )
-      .all(chunk) as { event_id: string }[];
+      );
+      statements.set(chunk.length, statement);
+    }
+    const rows = statement.all(chunk) as { event_id: string }[];
     for (const row of rows) compacted.add(row.event_id);
   }
   return compacted;
@@ -244,6 +251,7 @@ export class LocalStore {
   private readonly eventStatements = new Map<number, Statement>();
   private readonly coordinationStatements = new Map<number, Statement>();
   private readonly outboxStatements = new Map<number, Statement>();
+  private readonly receiptStatements = new Map<number, Statement>();
   private lastOutboxCap: number | null = null;
 
   constructor(readonly db: SqliteDatabase) {}
@@ -263,6 +271,7 @@ export class LocalStore {
       // payloads. Coordination mirroring below still runs for durable replays.
       const compacted = receiptEventIds(
         this.db,
+        this.receiptStatements,
         events.map((event) => event.event_id),
       );
       const hotEvents = events.filter((event) => !compacted.has(event.event_id));

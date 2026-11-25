@@ -20,6 +20,8 @@ export function openSqlite(path: string, options: OpenSqliteOptions = {}): Sqlit
     fileMustExist: options.fileMustExist ?? false,
   });
   if (!options.readonly) {
+    // better-sqlite3 defaults to 16 MiB; cap the native page cache to keep long-running RSS bounded.
+    db.pragma('cache_size = -4096');
     if (options.wal !== false) {
       db.pragma('journal_mode = WAL');
       db.pragma('synchronous = NORMAL');

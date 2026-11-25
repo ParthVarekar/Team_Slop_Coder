@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { migrate, openSqlite, DAEMON_MIGRATIONS } from '@weft/core';
 import { makeId, ulid } from '@weft/protocol';
 import { LocalStore, type StoredLocalEvent } from './store.js';
@@ -42,6 +42,21 @@ describe('LocalStore batched inserts', () => {
     store.insertEvents(events, true);
     expect(store.countEvents()).toBe(205);
     expect(store.pendingOutboxCount()).toBe(205);
+    db.close();
+  });
+
+  it('reuses receipt lookup statements for repeated batch sizes', () => {
+    const db = openSqlite(':memory:');
+    migrate(db, DAEMON_MIGRATIONS);
+    const store = new LocalStore(db);
+    const prepare = vi.spyOn(db, 'prepare');
+
+    store.insertEvents([event('tool.post', 1)], false);
+    store.insertEvents([event('tool.post', 2)], false);
+
+    expect(
+      prepare.mock.calls.filter(([sql]) => String(sql).includes('FROM event_receipts')),
+    ).toHaveLength(1);
     db.close();
   });
 

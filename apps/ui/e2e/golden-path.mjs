@@ -74,7 +74,9 @@ function sampleProcess(pid) {
     const rssPages = Number(stat[23]);
     return { rssMB: (rssPages * 4096) / 1e6, cpuSeconds: ticks / 100 };
   }
-  const out = execFileSync('ps', ['-o', 'rss=,time=', '-p', String(pid)]).toString().trim();
+  const out = execFileSync('ps', ['-o', 'rss=,time=', '-p', String(pid)])
+    .toString()
+    .trim();
   const [rss, time] = out.split(/\s+/);
   const [m, s] = time.split(':');
   return { rssMB: Number(rss) / 1024, cpuSeconds: Number(m) * 60 + Number(s) };
@@ -107,10 +109,17 @@ async function main() {
   git(['config', 'user.name', 'Weft E2E']);
   git(['config', 'commit.gpgsign', 'false']);
   git(['config', 'core.autocrlf', 'false']);
-  execFileSync('git', ['commit', '--allow-empty', '-qm', 'base'], { cwd: repoDir, stdio: 'ignore' });
+  execFileSync('git', ['commit', '--allow-empty', '-qm', 'base'], {
+    cwd: repoDir,
+    stdio: 'ignore',
+  });
 
   // Daemon.
-  daemon = spawn(process.execPath, [daemonCli, 'start', '--data-dir', fwd(dataDir), '--port', String(PORT), '--log-level', 'warn'], { cwd: root, stdio: 'ignore' });
+  daemon = spawn(
+    process.execPath,
+    [daemonCli, 'start', '--data-dir', fwd(dataDir), '--port', String(PORT), '--log-level', 'warn'],
+    { cwd: root, stdio: 'ignore' },
+  );
   await waitFor(async () => (await fetch(`${BASE}/healthz`)).ok, 'daemon healthz');
   secret = JSON.parse(readFileSync(join(dataDir, 'identity.json'), 'utf8')).hook_secret;
 
@@ -145,12 +154,44 @@ async function main() {
   const sid = 'e2e-session';
   const cwd = fwd(repoDir);
   for (const h of [
-    { hook_event_name: 'SessionStart', session_id: sid, cwd, model: 'claude-sonnet-4', source: 'startup' },
+    {
+      hook_event_name: 'SessionStart',
+      session_id: sid,
+      cwd,
+      model: 'claude-sonnet-4',
+      source: 'startup',
+    },
     { hook_event_name: 'UserPromptSubmit', session_id: sid, prompt: 'Implement the golden path' },
-    { hook_event_name: 'PreToolUse', session_id: sid, tool_name: 'Write', tool_use_id: 'w1', tool_input: { file_path: 'src/a.ts' } },
-    { hook_event_name: 'PostToolUse', session_id: sid, tool_name: 'Write', tool_use_id: 'w1', tool_input: { file_path: 'src/a.ts' }, tool_response: { success: true } },
-    { hook_event_name: 'PreToolUse', session_id: sid, tool_name: 'Bash', tool_use_id: 'b1', tool_input: { command: 'pnpm test' } },
-    { hook_event_name: 'PostToolUse', session_id: sid, tool_name: 'Bash', tool_use_id: 'b1', tool_input: { command: 'pnpm test' }, tool_response: { stdout: 'ok', exitCode: 0 } },
+    {
+      hook_event_name: 'PreToolUse',
+      session_id: sid,
+      tool_name: 'Write',
+      tool_use_id: 'w1',
+      tool_input: { file_path: 'src/a.ts' },
+    },
+    {
+      hook_event_name: 'PostToolUse',
+      session_id: sid,
+      tool_name: 'Write',
+      tool_use_id: 'w1',
+      tool_input: { file_path: 'src/a.ts' },
+      tool_response: { success: true },
+    },
+    {
+      hook_event_name: 'PreToolUse',
+      session_id: sid,
+      tool_name: 'Bash',
+      tool_use_id: 'b1',
+      tool_input: { command: 'pnpm test' },
+    },
+    {
+      hook_event_name: 'PostToolUse',
+      session_id: sid,
+      tool_name: 'Bash',
+      tool_use_id: 'b1',
+      tool_input: { command: 'pnpm test' },
+      tool_response: { stdout: 'ok', exitCode: 0 },
+    },
     { hook_event_name: 'Stop', session_id: sid },
   ]) {
     assert.equal((await postHook(h)).status, 202);
@@ -188,7 +229,12 @@ async function main() {
   const hookLatencies = [];
   for (let i = 0; i < 200; i++) {
     const t0 = performance.now();
-    const res = await postHook({ hook_event_name: 'PreToolUse', session_id: 'perf', tool_name: 'Read', tool_input: { file_path: `f${i}.ts` } });
+    const res = await postHook({
+      hook_event_name: 'PreToolUse',
+      session_id: 'perf',
+      tool_name: 'Read',
+      tool_input: { file_path: `f${i}.ts` },
+    });
     await res.text();
     hookLatencies.push(performance.now() - t0);
   }
@@ -202,8 +248,16 @@ async function main() {
   for (let i = 0; i < 15; i++) {
     const marker = `Probe_${i}`;
     const t0 = performance.now();
-    await postHook({ hook_event_name: 'PreToolUse', session_id: 'ui-perf', tool_name: marker, tool_input: {} });
-    await page.waitForFunction((m) => document.body.innerText.includes(m), marker, { polling: 16, timeout: 5000 });
+    await postHook({
+      hook_event_name: 'PreToolUse',
+      session_id: 'ui-perf',
+      tool_name: marker,
+      tool_input: {},
+    });
+    await page.waitForFunction((m) => document.body.innerText.includes(m), marker, {
+      polling: 16,
+      timeout: 5000,
+    });
     uiLatencies.push(performance.now() - t0);
   }
   const uiP95 = percentile(uiLatencies, 0.95);
@@ -219,6 +273,17 @@ async function main() {
   console.log(`  idle cpu=${idleCpu.toFixed(2)}% rss=${after.rssMB.toFixed(1)}MB`);
   assert.ok(after.rssMB < 150, `idle RSS ${after.rssMB.toFixed(1)}MB exceeds 150MB budget`);
   assert.ok(idleCpu < 1, `idle CPU ${idleCpu.toFixed(2)}% exceeds 1% budget`);
+
+  await page.getByRole('button', { name: 'Command palette' }).click();
+  await page.getByPlaceholder('Search commands, sessions, tasks, repos…').fill('retention');
+  await page.getByRole('option', { name: 'Retention and compaction…' }).click();
+  const retention = page.getByRole('dialog', { name: 'Retention and compaction' });
+  await retention.getByRole('heading', { name: 'Local database' }).waitFor();
+  await retention.getByText('Hot events (exact)', { exact: true }).waitFor();
+  await retention.getByRole('button', { name: 'Dry run (writes nothing)' }).click();
+  await retention.getByText('Dry-run selection', { exact: true }).waitFor();
+  await retention.getByRole('button', { name: 'Done' }).click();
+  console.log('✓ retention status and non-destructive dry run');
 
   assert.deepEqual(pageErrors, [], `page errors: ${pageErrors.join('; ')}`);
   console.log('\nGolden path + perf gate PASSED');

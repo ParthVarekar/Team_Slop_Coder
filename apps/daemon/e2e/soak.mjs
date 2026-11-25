@@ -12,20 +12,25 @@ import {
 import { availableParallelism, tmpdir } from 'node:os';
 import { createServer as netServer } from 'node:net';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { performance } from 'node:perf_hooks';
+import { clearTimeout } from 'node:timers';
 import { makeId, ulid } from '@weft/protocol';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, '..', '..', '..');
 const daemonCli = join(root, 'apps', 'daemon', 'dist', 'cli.js');
+const gcBridge = join(here, 'gc-bridge.mjs');
 const durationMs = Number(process.env.WEFT_SOAK_MS ?? 24 * 60 * 60 * 1000);
 const sampleMs = Number(process.env.WEFT_SOAK_SAMPLE_MS ?? 60_000);
 const warmupMs = Number(process.env.WEFT_SOAK_WARMUP_MS ?? Math.min(300_000, durationMs / 20));
 const rate = Number(process.env.WEFT_SOAK_RATE ?? 10);
 const sessionsCount = Number(process.env.WEFT_SOAK_SESSIONS ?? 40);
 const availableCpus = availableParallelism();
-assert.ok(durationMs > 0 && sampleMs > 0 && warmupMs >= 0 && rate > 0, 'invalid soak settings');
+assert.ok(
+  durationMs > 0 && sampleMs > 0 && warmupMs >= 0 && warmupMs < durationMs && rate > 0,
+  'invalid soak settings',
+);
 assert.ok(Number.isInteger(sessionsCount) && sessionsCount > 0, 'invalid soak session count');
 
 const temp = mkdtempSync(join(tmpdir(), 'weft-soak-'));
@@ -39,6 +44,8 @@ let failed;
 let generated = 0;
 let inspectorUrl;
 let inspector;
+let gcDone = null;
+let gcRequestId = 0;
 let baselineSnapshot;
 let finalSnapshot;
 const heapSnapshots = process.env.WEFT_SOAK_HEAP_SNAPSHOTS === '1';
@@ -185,6 +192,26 @@ async function health() {
   return response.json();
 }
 
+async function collectGarbage() {
+  const requestId = ++gcRequestId;
+  await new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      gcDone = null;
+      if (error) reject(error);
+      else resolve();
+    };
+    const timeout = setTimeout(() => finish(new Error('daemon GC request timed out')), 30_000);
+    gcDone = () => finish();
+    child.send({ type: 'weft:gc', request_id: requestId }, (error) => {
+      if (error) finish(error);
+    });
+  });
+}
+
 async function takeHeapSnapshot(label, timestamp) {
   const dir = join(root, 'bench', 'artifacts', 'runs', 'heap');
   mkdirSync(dir, { recursive: true });
@@ -229,6 +256,9 @@ async function main() {
   child = spawn(
     process.execPath,
     [
+      '--expose-gc',
+      '--import',
+      pathToFileURL(gcBridge).href,
       ...(heapSnapshots ? ['--inspect=127.0.0.1:0'] : []),
       daemonCli,
       'start',
@@ -241,9 +271,12 @@ async function main() {
     ],
     {
       cwd: root,
-      stdio: ['ignore', 'ignore', 'pipe'],
+      stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
     },
   );
+  child.on('message', (message) => {
+    if (message?.type === 'weft:gc:done' && message.request_id === gcRequestId) gcDone?.();
+  });
   let stderr = '';
   child.stderr.on('data', (chunk) => {
     const text = chunk.toString();
@@ -340,6 +373,9 @@ async function main() {
       }
       if (now >= nextSample) {
         try {
+          const uncollected = await health();
+          await collectGarbage();
+          await sleep(25);
           const status = await health();
           if (heapSnapshots && !baselineSnapshot && now - started >= warmupMs) {
             baselineSnapshot = await takeHeapSnapshot('baseline', timestamp);
@@ -347,6 +383,8 @@ async function main() {
           const sample = {
             elapsed_ms: Math.round(now - started),
             ...status.runtime,
+            uncollected_rss_bytes: uncollected.runtime.rss_bytes,
+            uncollected_heap_used_bytes: uncollected.runtime.heap_used_bytes,
             events: status.events,
             pending: status.pending,
             fd_count: fdCount(child.pid),
@@ -370,6 +408,8 @@ async function main() {
     await new Promise((resolve) => sampleStream.once('finish', resolve));
   }
 
+  await collectGarbage();
+  await sleep(25);
   if (heapSnapshots) finalSnapshot = await takeHeapSnapshot('final', timestamp);
   await sleep(250);
   const finalHealth = await health();
@@ -392,6 +432,7 @@ async function main() {
     requestedDurationMs: durationMs,
     actualDurationMs: +(performance.now() - started).toFixed(0),
     sampleMs,
+    memorySampleMode: 'post-gc',
     warmupMs,
     finalWindowMs: finalWindow,
     rate,
@@ -407,6 +448,10 @@ async function main() {
       heapTotalBytes: median(usableBaseline.map((sample) => sample.heap_total_bytes)),
       externalBytes: median(usableBaseline.map((sample) => sample.external_bytes)),
       arrayBuffersBytes: median(usableBaseline.map((sample) => sample.array_buffers_bytes)),
+      uncollectedRssBytes: median(usableBaseline.map((sample) => sample.uncollected_rss_bytes)),
+      uncollectedHeapUsedBytes: median(
+        usableBaseline.map((sample) => sample.uncollected_heap_used_bytes),
+      ),
       activeResources: median(usableBaseline.map((sample) => sample.active_resources)),
       handles: median(usableBaseline.map((sample) => sample.fd_count)),
     },
@@ -416,6 +461,10 @@ async function main() {
       heapTotalBytes: median(usableFinal.map((sample) => sample.heap_total_bytes)),
       externalBytes: median(usableFinal.map((sample) => sample.external_bytes)),
       arrayBuffersBytes: median(usableFinal.map((sample) => sample.array_buffers_bytes)),
+      uncollectedRssBytes: median(usableFinal.map((sample) => sample.uncollected_rss_bytes)),
+      uncollectedHeapUsedBytes: median(
+        usableFinal.map((sample) => sample.uncollected_heap_used_bytes),
+      ),
       activeResources: median(usableFinal.map((sample) => sample.active_resources)),
       handles: median(usableFinal.map((sample) => sample.fd_count)),
     },
@@ -424,6 +473,11 @@ async function main() {
     averageCpuSystemPercent: 0,
     averageCpuOneCorePercent: 0,
     peakRssBytes: Math.max(...samples.map((sample) => sample.rss_bytes)),
+    postWarmupPeakRssBytes: Math.max(
+      ...samples
+        .filter((sample) => sample.elapsed_ms >= warmupMs)
+        .map((sample) => sample.rss_bytes),
+    ),
     peakPending: Math.max(...samples.map((sample) => sample.pending)),
     fullAcceptanceRun: durationMs >= 24 * 60 * 60 * 1000,
     ...(baselineSnapshot ? { baselineHeapSnapshot: baselineSnapshot } : {}),
@@ -464,6 +518,10 @@ async function main() {
   assert.ok(
     result.final.rssBytes < result.rssBudgetBytes,
     `final RSS ${(result.final.rssBytes / 1048576).toFixed(1)}MB exceeds ${activeLoad ? 300 : 150}MB budget`,
+  );
+  assert.ok(
+    result.postWarmupPeakRssBytes < result.rssBudgetBytes,
+    `post-warmup peak RSS ${(result.postWarmupPeakRssBytes / 1048576).toFixed(1)}MB exceeds ${activeLoad ? 300 : 150}MB budget`,
   );
   if (!result.fullAcceptanceRun) {
     assert.equal(
