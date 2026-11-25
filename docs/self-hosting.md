@@ -18,7 +18,7 @@ curl -fsS http://127.0.0.1:7420/healthz
 Persist `POSTGRES_PASSWORD` securely for future restarts. Losing it does not erase the database, but you will need a deliberate Postgres password-recovery procedure. Migrations apply automatically when the server starts.
 
 - `server` is reachable only at `127.0.0.1:${WEFT_PORT:-7420}` by default.
-- `db` publishes no host port; only the server can reach it on the Compose network.
+- `db` publishes no host port and sits on an internal backend network; only the server shares that network. The server also joins a separate frontend network for the loopback-published API.
 - Named volumes `weft-postgres` and `weft-server` hold database and server state.
 - Both services have healthchecks; the server waits for Postgres to become healthy.
 - The server runs as `node` with a read-only root filesystem, dropped capabilities, and a writable state volume.
@@ -96,16 +96,27 @@ For remote access, prefer an SSH tunnel such as `ssh -L 7420:127.0.0.1:7420 user
 
 ## Environment reference
 
-| Variable                         | Default / requirement                                                                     |
-| -------------------------------- | ----------------------------------------------------------------------------------------- |
-| `POSTGRES_PASSWORD`              | Required; URL-safe secret from the environment, no default                                |
-| `WEFT_PORT`                      | Host port `7420`, bound to `127.0.0.1`                                                    |
-| `WEFT_LOG_LEVEL`                 | `info`                                                                                    |
-| `WEFT_SERVER_CORS_ORIGIN`        | `http://127.0.0.1:5173`; comma-separated allowlist for other UI origins                   |
-| `WEFT_SERVER_WEBHOOKS_ENABLED`   | `false`                                                                                   |
-| `WEFT_SERVER_WEBHOOK_MASTER_KEY` | Unset; required only when webhooks are enabled; exactly 32 bytes encoded as hex or base64 |
+| Variable                                      | Default / requirement                                                                     |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `POSTGRES_PASSWORD`                           | Required; URL-safe secret from the environment, no default                                |
+| `WEFT_PORT`                                   | Host port `7420`, bound to `127.0.0.1`                                                    |
+| `WEFT_LOG_LEVEL`                              | `info`                                                                                    |
+| `WEFT_SERVER_CORS_ORIGIN`                     | `http://127.0.0.1:5173`; comma-separated allowlist for other UI origins                   |
+| `WEFT_SERVER_WEBHOOKS_ENABLED`                | `false`                                                                                   |
+| `WEFT_SERVER_WEBHOOK_MASTER_KEY`              | Unset; required only when webhooks are enabled; exactly 32 bytes encoded as hex or base64 |
+| `WEFT_SERVER_WEBHOOK_ALLOW_PRIVATE_ENDPOINTS` | `false`; set to `true` only for explicitly trusted private endpoints                      |
+
+The master key is passed through only when it exists in the server environment; leaving it unset is valid while webhooks are disabled. `WEFT_SERVER_WEBHOOK_ALLOW_PRIVATE_ENDPOINTS` is also forwarded and defaults to `false`.
 
 Webhook secrets are encrypted with AES-256-GCM. Supply the master key only through the environment/secret manager; JSON config cannot provide it. Generate a key with `openssl rand -hex 32` and back it up securely. Losing or changing it makes existing encrypted webhook secrets undecryptable. Private webhook targets remain blocked unless an operator explicitly sets `WEFT_SERVER_WEBHOOK_ALLOW_PRIVATE_ENDPOINTS=true` for a trusted network.
+
+## Local verification
+
+An isolated Compose project on Windows x64 passed 18 runtime checks: image build and health, non-root runtime user, read-only root filesystem, dropped capabilities, loopback-only API publishing, no published Postgres port, internal backend networking, frontend-to-Postgres isolation, no Git executable in the server image, writable `/tmp`, unwritable `/app`, and `server.json` mode `600`. The same run verified SQL bootstrap, project-token issuance, unauthenticated rejection, authenticated task mutation, retention status, bootstrap-secret rotation on restart, stale-secret rejection, token validity after restart, and task persistence after forced server and Postgres container recreation with named volumes preserved. Verification-created containers, networks, volumes, and the local server image were removed afterward.
+
+The daemon tarball was installed into a fresh temporary npm prefix and passed `weft --help`, daemon health, 10 persisted hook events, `weft status`, graceful `weft stop`, clean restart recovery, forced unclean restart recovery, identity/hook-secret preservation, event persistence, and final pidfile cleanup.
+
+These are local functional and isolation checks, not a hosted SLA, production upgrade test, or completed 24-hour acceptance soak.
 
 ## Current boundaries
 

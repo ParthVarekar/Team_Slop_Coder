@@ -7,6 +7,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the environment}
     volumes:
       - weft-postgres:/var/lib/postgresql/data
+    networks:
+      - backend
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}']
       interval: 5s
@@ -19,18 +21,22 @@ services:
       context: .
       dockerfile: Dockerfile
     environment:
-      WEFT_DATABASE_URL: postgres://weft:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the environment}@db:5432/weft
-      WEFT_SERVER_HOST: 0.0.0.0
-      WEFT_SERVER_PORT: 7420
-      WEFT_SERVER_DATA_DIR: /var/lib/weft
-      WEFT_LOG_LEVEL: ${WEFT_LOG_LEVEL:-info}
-      WEFT_SERVER_CORS_ORIGIN: ${WEFT_SERVER_CORS_ORIGIN:-http://127.0.0.1:5173}
-      WEFT_SERVER_WEBHOOKS_ENABLED: ${WEFT_SERVER_WEBHOOKS_ENABLED:-false}
-      WEFT_SERVER_WEBHOOK_MASTER_KEY: ${WEFT_SERVER_WEBHOOK_MASTER_KEY:-}
+      - WEFT_DATABASE_URL=postgres://weft:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the environment}@db:5432/weft
+      - WEFT_SERVER_HOST=0.0.0.0
+      - WEFT_SERVER_PORT=7420
+      - WEFT_SERVER_DATA_DIR=/var/lib/weft
+      - WEFT_LOG_LEVEL=${WEFT_LOG_LEVEL:-info}
+      - WEFT_SERVER_CORS_ORIGIN=${WEFT_SERVER_CORS_ORIGIN:-http://127.0.0.1:5173}
+      - WEFT_SERVER_WEBHOOKS_ENABLED=${WEFT_SERVER_WEBHOOKS_ENABLED:-false}
+      - WEFT_SERVER_WEBHOOK_MASTER_KEY
+      - WEFT_SERVER_WEBHOOK_ALLOW_PRIVATE_ENDPOINTS=${WEFT_SERVER_WEBHOOK_ALLOW_PRIVATE_ENDPOINTS:-false}
     ports:
       - '127.0.0.1:${WEFT_PORT:-7420}:7420'
     volumes:
       - weft-server:/var/lib/weft
+    networks:
+      - backend
+      - frontend
     depends_on:
       db:
         condition: service_healthy
@@ -56,3 +62,8 @@ services:
 volumes:
   weft-postgres:
   weft-server:
+
+networks:
+  backend:
+    internal: true
+  frontend:

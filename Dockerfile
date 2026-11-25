@@ -7,6 +7,7 @@ COPY packages/protocol/package.json packages/protocol/package.json
 COPY packages/core/package.json packages/core/package.json
 COPY apps/server/package.json apps/server/package.json
 RUN pnpm install --filter @weft/server... --frozen-lockfile
+COPY tsconfig.base.json ./
 COPY packages/protocol packages/protocol
 COPY packages/core packages/core
 COPY apps/server apps/server

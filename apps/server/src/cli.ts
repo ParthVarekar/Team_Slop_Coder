@@ -170,7 +170,12 @@ async function status(flags: Record<string, string>): Promise<void> {
   const url = `http://${host}:${port}/healthz`;
   try {
     const res = await fetch(url);
-    console.log(JSON.stringify(await res.json(), null, 2));
+    const body = (await res.json()) as { ok?: unknown };
+    console.log(JSON.stringify(body, null, 2));
+    if (!res.ok || body.ok !== true) {
+      console.error(`weft server unhealthy at ${url}`);
+      process.exitCode = 1;
+    }
   } catch {
     console.error(`weft server not reachable at ${url}`);
     process.exitCode = 1;
